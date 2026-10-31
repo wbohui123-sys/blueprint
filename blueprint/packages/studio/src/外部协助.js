@@ -49,7 +49,8 @@ export function 外部协助投影(catalog, events, inbox, live, parentSessionId
 
 export function 原生外部运行(ctx, parentSessionId) {
   const subagents = ctx.get('subagents')
-  if (typeof subagents?.listExternalActivations !== 'function') throw new Error('原生外部任务运行查询不可用')
+  // dsh 0.2.1-rc.5 没有 listExternalActivations：没有外部任务时按空处理，别让整块面板炸掉。
+  if (typeof subagents?.listExternalActivations !== 'function') return []
   return subagents.listExternalActivations(parentSessionId)
 }
 

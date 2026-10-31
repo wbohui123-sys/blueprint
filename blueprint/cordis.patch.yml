@@ -47,7 +47,7 @@
       name: '@blueprint/node/features'
       config:
         resourceRoot: !!js "process.getBuiltinModule('node:url').fileURLToPath(new URL('../app/.build/native-resources/', process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire(profileContext.dir + '/package.json').resolve('@blueprint/bundle/package.json'))))"
-        entries: !!js "Object.fromEntries(Object.entries({presentation:'@deepseek-ai/dsh-agent-tool-presentation',workflow:'@deepseek-ai/dsh-workflow-ptc',workflowTool:'@deepseek-ai/dsh-tool-workflow',browserRegistry:'@deepseek-ai/dsh-browser-use',browserProvider:'@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',office:'@deepseek-ai/dsh-skill-office',dependencies:'@deepseek-ai/dsh-tool-workspace-dependencies'}).map(([key,name]) => [key,process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire(profileContext.installAnchor).resolve(name)).href]))"
+        entries: !!js "Object.fromEntries(Object.entries({presentation:'@deepseek-ai/dsh-agent-tool-presentation',workflow:'@deepseek-ai/dsh-workflow-ptc',workflowTool:'@deepseek-ai/dsh-tool-workflow',browserRegistry:'@deepseek-ai/dsh-browser-use',browserProvider:'@deepseek-ai/dsh-experimental-browser-use-playwright-mcp',office:'@deepseek-ai/dsh-skill-office',dependencies:'@deepseek-ai/dsh-tool-workspace-dependencies'}).map(([key,name]) => [key,process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire((process.env.BLUEPRINT_INSTALL_ANCHOR || profileContext.installAnchor)).resolve(name)).href]))"
     - id: subagent-workflow-spawn
       name: '@deepseek-ai/dsh-subagent-spawn-in-process'
       config:

@@ -18,6 +18,11 @@ import { 一段 } from '../../prompt/src/index.js'
 import { 文件许可, 隔离命令 } from './项目隔离.js'
 
 const exec = promisify(execFile)
+// Windows: git 输出的 worktree 路径用正斜杠、盘符大小写不定，直接比对会误判。
+const 同路径 = (a, b) => process.platform === 'win32'
+  ? String(a).replace(/\\/g, '/').toLowerCase() === String(b).replace(/\\/g, '/').toLowerCase()
+  : a === b
+
 const 空间队 = new Map()
 
 export const 节点分支 = id => {
@@ -153,9 +158,9 @@ async function 准备空间(根, 行, 名册, {新建项目 = false} = {}) {
     await writeFile(文件许可(scope, join(mainGit, 'info', 'exclude'), true), 不进版本.join('\n') + '\n')
   } else if (!init.isDirectory()) throw new Error('Git 空间：作品/.git 须为本项目主仓库目录')
   const top = await git(['-C', repo, 'rev-parse', '--show-toplevel'])
-  if (await realpath(top) !== repo) throw new Error('Git 空间：作品位置没有独立主仓库')
+  if (!同路径(await realpath(top), repo)) throw new Error('Git 空间：作品位置没有独立主仓库')
   const common = await git(['-C', repo, 'rev-parse', '--path-format=absolute', '--git-common-dir'])
-  if (文件许可(scope, common) !== mainGit) throw new Error('Git 空间：主仓库元数据位置不合')
+  if (!同路径(文件许可(scope, common), mainGit)) throw new Error('Git 空间：主仓库元数据位置不合')
   let hasBranch = await git(['-C', repo, 'show-ref', '--verify', '--quiet', `refs/heads/${branch}`], [1]) !== null
   if (行.id === '0' && !hasBranch) {
     if (!新建项目 || 行.session) throw new Error('Git 空间：node-0 分支缺失，不能恢复既有节点')
@@ -170,7 +175,7 @@ async function 准备空间(根, 行, 名册, {新建项目 = false} = {}) {
   const reference = `refs/heads/${branch}`
   const registered = spaces.find(row => row.branch === reference)
   if (registered) {
-    if (registered.worktree !== target) throw new Error(`Git 空间：${branch} 已绑定其他 worktree，拒绝改绑`)
+    if (!同路径(registered.worktree, target)) throw new Error(`Git 空间：${branch} 已绑定其他 worktree，拒绝改绑`)
     if (!(await 存在(target))) throw new Error(`Git 空间：${path} worktree 文件缺失`)
     const actualBranch = await git(['-C', target, 'symbolic-ref', '-q', 'HEAD'], [1])
     const actualCommon = await git(['-C', target, 'rev-parse', '--path-format=absolute', '--git-common-dir'])

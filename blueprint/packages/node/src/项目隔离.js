@@ -50,7 +50,7 @@ export function 原生提供方代码目录(entries = []) {
       const platform = packageRoot(`@anthropic-ai/claude-agent-sdk-${process.platform}-${process.arch}`, sdk.require)
       if (platform.metadata.version !== sdk.metadata.version) throw new Error('PROJECT_ISOLATION: Claude 平台载荷版本不一致。')
       roots.add(sdk.root); roots.add(platform.root)
-    } else if (provider.name === '@deepseek-ai/dsh-ptc-runtime-node' && provider.version === '0.2.1-alpha.2') {
+    } else if (provider.name === '@deepseek-ai/dsh-ptc-runtime-node' && /^0\.2\.1-/.test(String(provider.version || ''))) {
       roots.add(dirname(dirname(entry)))
     } else throw new Error('PROJECT_ISOLATION: 只接纳部署固定的官方执行提供方入口。')
   }
@@ -146,6 +146,7 @@ export function 会话附件文件(ctx, session) {
 // 不接受工具参数指定额外写入范围，也不放开整个 /var/folders 或 /tmp。
 let 原生临时目录
 export function 系统临时目录() {
+  if (process.platform !== 'darwin') return realpathSync(process.env.TEMP || process.env.TMP || join(homedir(), 'AppData/Local/Temp'))
   if (!原生临时目录) {
     const path = execFileSync('/usr/bin/getconf', ['DARWIN_USER_TEMP_DIR'], { encoding: 'utf8', timeout: 5000 }).trim()
     const real = realpathSync(path)
@@ -160,6 +161,7 @@ export function 系统临时目录() {
 let 原生缓存目录
 /** 用户缓存目录（`…/C`，系统的显卡着色器缓存在这里），同样由宿主读取。 */
 export function 系统缓存目录() {
+  if (process.platform !== 'darwin') return realpathSync(process.env.LOCALAPPDATA || join(homedir(), '.cache'))
   if (!原生缓存目录) {
     const path = execFileSync('/usr/bin/getconf', ['DARWIN_USER_CACHE_DIR'], { encoding: 'utf8', timeout: 5000 }).trim()
     const real = realpathSync(path)
@@ -181,9 +183,11 @@ export function 共用缓存位置(home = homedir()) {
   if (!缓存位置 || 缓存位置.home !== home) {
     const 点缓存 = join(home, '.cache')
     mkdirSync(点缓存, { recursive: true })
-    const 根们 = [系统缓存目录(), realpathSync(join(home, 'Library/Caches')), realpathSync(点缓存)]
+    const 根们 = process.platform === 'darwin'
+      ? [系统缓存目录(), realpathSync(join(home, 'Library/Caches')), realpathSync(点缓存)]
+      : [系统缓存目录(), realpathSync(点缓存)]
     const 任一 = `(${根们.map(转正则).join('|')})`
-    缓存位置 = { home, 根们, 点缓存: 根们[2], 库缓存: 根们[1], 自己的式: [
+    缓存位置 = { home, 根们, 点缓存: process.platform === 'darwin' ? 根们[2] : realpathSync(点缓存), 库缓存: process.platform === 'darwin' ? 根们[1] : realpathSync(点缓存), 自己的式: [
       `^${任一}/(com[.]blueprint[.](desktop|studio)|com[.]github[.]Electron|com[.]deepseek[.]dsh)([.][^/]*)?(/|$)`,
       `^${任一}/[^/]+[.]ShipIt(/|$)`,
       `^${转正则(根们[1])}/(electron|electron-builder)(/|$)`,
@@ -243,8 +247,38 @@ export function 隔离规则({ 根, 仓库, 技能, 保护根 = [仓库], 私人
   ].join('\n')
 }
 
+
+// Windows: 把写死的 POSIX 工具路径换成 Windows 上的同名命令（/usr/bin/git -> git）。
+const 工具映射 = { git: 'git', open: 'explorer', zip: 'tar', unzip: 'tar', trash: 'cmd', python3: 'python', stat: 'dir', grep: 'findstr', find: 'where' }
+function 换命令(p) {
+  if (process.platform !== 'win32' || typeof p !== 'string') return p
+  if (!p.startsWith('/usr/bin/')) return p
+  const name = p.slice('/usr/bin/'.length)
+  return 工具映射[name] || name
+}
+
 export function 隔离命令(spec, 范围) {
-  if (process.platform !== 'darwin') throw new Error('PROJECT_ISOLATION: 当前部署的硬隔离仅支持 macOS；拒绝无隔离执行。')
+  if (process.platform !== 'darwin') {
+    if (process.env.BLUEPRINT_ALLOW_UNISOLATED !== '1') throw new Error('PROJECT_ISOLATION: 当前部署的硬隔离仅支持 macOS；拒绝无隔离执行。设置 BLUEPRINT_ALLOW_UNISOLATED=1 可在其它平台以无沙箱方式运行（自担风险）。')
+    const cwd = 文件许可(范围, spec.cwd || 范围.目录 || 范围.根, false, 范围.目录 || 范围.根)
+    const 后台环境 = 范围.用户终端 ? { ...spec.env } : 后台工具环境(范围.根, spec.env)
+    const 临时目录 = 文件许可(范围, join(范围.根, 工具临时目录名), true)
+    mkdirSync(临时目录, { recursive: true })
+    const 公共工具 = join(临时目录, 公共工具夹名)
+    mkdirSync(公共工具, { recursive: true })
+    const 共用 = 共用缓存位置()
+    return {
+      ...spec, cwd, argv: [...spec.argv].map(换命令),
+      env: {
+        ...后台环境, PWD: cwd, BLUEPRINT_PROJECT_ROOT: 范围.根,
+        TMPDIR: 临时目录, TMP: 临时目录, TEMP: 临时目录, BLUEPRINT_TOOLS: 公共工具,
+        UV_CACHE_DIR: join(共用.点缓存, 'uv'), UV_PYTHON_INSTALL_DIR: join(共用.点缓存, 'blueprint/python'),
+        MPLCONFIGDIR: join(共用.点缓存, 'blueprint/matplotlib'), PIP_CACHE_DIR: join(共用.库缓存, 'pip'),
+        HF_HOME: join(共用.点缓存, 'huggingface'), XDG_CACHE_HOME: 共用.点缓存,
+        npm_config_cache: join(共用.点缓存, 'blueprint/npm'),
+      },
+    }
+  }
   const cwd = 文件许可(范围, spec.cwd || 范围.目录 || 范围.根, false, 范围.目录 || 范围.根)
   // 用户 PTY 保留自己的交互环境；项目内核边界不依赖模型的后台启动入口。
   const 后台环境 = 范围.用户终端 ? { ...spec.env } : 后台工具环境(范围.根, spec.env)

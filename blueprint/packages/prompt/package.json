@@ -13,7 +13,11 @@
     "src",
     "shells",
     "工具",
+    "重置",
+    "助理",
     "skill"
   ],
-  "dependencies": { "yaml": "^2.8.1" }
+  "dependencies": {
+    "yaml": "^2.8.1"
+  }
 }
