@@ -28,10 +28,10 @@
       name: '@blueprint/node'
       config:
         executionRuntimeEntries:
-          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire(profileContext.installAnchor).resolve('@deepseek-ai/dsh-ptc-runtime-node')).href"
+          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire((process.env.BLUEPRINT_INSTALL_ANCHOR || profileContext.installAnchor)).resolve('@deepseek-ai/dsh-ptc-runtime-node')).href"
         externalProviderEntries:
-          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire(profileContext.installAnchor).resolve('@deepseek-ai/dsh-subagent-codex')).href"
-          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire(profileContext.installAnchor).resolve('@deepseek-ai/dsh-subagent-claude-code')).href"
+          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire((process.env.BLUEPRINT_INSTALL_ANCHOR || profileContext.installAnchor)).resolve('@deepseek-ai/dsh-subagent-codex')).href"
+          - !!js "process.getBuiltinModule('node:url').pathToFileURL(process.getBuiltinModule('node:module').createRequire((process.env.BLUEPRINT_INSTALL_ANCHOR || profileContext.installAnchor)).resolve('@deepseek-ai/dsh-subagent-claude-code')).href"
 
 # 问用户。提问卡只给 run（照 dsh 原样，10-28）；helm、dock、spark 照旧在对话里问（问卡 1）。
 - id: tool-ask-user
