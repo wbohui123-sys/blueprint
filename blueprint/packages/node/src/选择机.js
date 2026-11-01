@@ -1,15 +1,18 @@
 /**
  * 选择机：每进入一个阶段前，在节点对话之外单独调用一次，只回答"下一步应该做什么"——一个阶段名。
- * 它看的就是节点这一步要发给模型的那一份 context（同 1）：同样的系统提示、工具、全部历史和这一步进来的话，
- * 末尾只加 `重置/选择机` 那一段。前面逐字相同，和节点接下来的请求共用前缀，缓存两头命中。
+ * 复用节点已提交的系统提示、工具历史和全部消息，首轮使用原生作用域装配；末尾接这一步的输入和选择问题。
+ * 缓存由 DeepSeek 服务端管理；这里保留可复用前缀，不保证每次命中。
  * 机器把选出的那一阶段的页接在这一步的输入后面，节点自己干；选择过程不进节点对话，只记进 `系统文档/选择机.jsonl`。
  */
 import { createHash } from 'node:crypto'
 import { appendFile, mkdir } from 'node:fs/promises'
 import { join } from 'node:path'
 import { BlockAssembler, createUserMessage } from '@deepseek-ai/dsh-llm'
+import { assembleContextFor } from '@deepseek-ai/dsh-agent'
+import { renderPrompt } from '@deepseek-ai/dsh-system-prompt'
+import { 保存选择机请求 } from './选择机请求.js'
 import { 一段, 执行者文案 } from '../../prompt/src/index.js'
-import { 节点前缀文 } from '../../context/src/拼.js'
+import { 节点前缀文, 有节点前缀了 } from '../../context/src/拼.js'
 import { 拼公共前缀 } from '../../context/src/index.js'
 import { 打开的执行者, 执行者们, 读子代理开关 } from './子代理开关.js'
 import { 读名册, 改名册, 行Of, 读节点文档, 读模型表, 节点类型, 文档夹名, 就绪表, 新阶段待开, 孩子们 } from '../../roster/src/index.js'
@@ -67,7 +70,8 @@ const 选择机消息 = text => createUserMessage({ content: [{ type: 'text', te
 
 /**
  * 节点会话里还没有系统提示（开工第一轮，原生在这一步之后才放进去）：
- * 照装配清单拼系统提示、照节点前缀拼第一条。接近节点马上要看到的那一份，不逐字相同。
+ * 系统提示与工具取原生装配；离线调用没有 agent 时保留模板回退。
+ * 节点前缀已由上下文插件插入时不再重复添加。
  */
 async function 开工那份(根, 行) {
   const 名册 = await 读名册(根), doc = await 读节点文档(根, 行)
@@ -75,43 +79,57 @@ async function 开工那份(根, 行) {
 }
 
 /**
- * 选择机那一次调用的输入：节点这一步要发的那一份（同 1），末尾接问题那一段。
- * `session`：节点的会话，从账本取请求头（模型配置、工具）和 `deriveMessages()`；
+ * 选择机那一次调用的输入：复用节点已提交的请求前缀，末尾接这一步的输入和问题。
+ * `session`：节点的会话，从账本取请求头、消息及工具变更历史，交给原生 DSH 投影；
  * `这一步`：这一步新到、即将进节点对话的消息（叫醒话、用户的话、开头和情境）。
  */
-export async function 选择机输入(根, 行, session, 这一步 = []) {
+export async function 选择机输入(根, 行, session, 这一步 = [], { assembly } = {}) {
   const 菜单 = 菜单Of(节点类型(行))
   const 问题 = 选择机消息(一段('重置/选择机', { 上一个阶段: 上一个阶段Of(行.selector), 进过: 进过Of(行.selector),
     结构段: 结构段Of(await 读节点文档(根, 行)), 菜单: 菜单.join('、') }))
   const header = session?.requestHeader?.()
   const 历史 = session?.deriveMessages?.() || []
+  const toolHistory = header ? session?.toolHistory?.() : undefined
   const 开工 = 历史.some(m => m.role === 'system') ? null : await 开工那份(根, 行)
+  const tools = header?.tools ?? assembly?.tools
   return {
-    ...(开工 ? { system: 开工.system } : {}),
-    messages: [...(开工 ? 开工.开场 : []), ...历史, ...这一步, 问题],
+    ...(开工 ? { system: assembly ? renderPrompt(assembly) : 开工.system } : {}),
+    messages: [...(开工 && !有节点前缀了([...历史, ...这一步]) ? 开工.开场 : []), ...历史, ...这一步, 问题],
     // 工具照原样带上：dsh 没有禁用工具的开关，少了它前缀就和节点的请求对不上。
-    ...(header?.tools?.length ? { tools: [...header.tools] } : {}),
+    ...(tools?.length ? { tools: [...tools] } : {}),
+    // 仅有当前工具不够：原生投影还需要历史，才能保留增量声明和 developer 消息。
+    ...(toolHistory ? { toolHistory } : {}),
+    ...(session?.id ? { sessionId: session.id } : {}),
     菜单, 模型: header?.config,
   }
 }
 
-/** 用节点自己的模型；还没发过请求就照项目的模型表。思考强度调低，这个模型不认 low 就用它的默认档。 */
-async function 调用配置(ctx, 根, 模型) {
-  const 选 = 模型?.provider && 模型?.model ? 模型 : await 读模型表(根)
+/** 沿用节点已生效的模型和思考档，避免辅助调用另开缓存前缀；首轮与管理节点一样尝试 max。 */
+async function 调用配置(ctx, 根, 模型, 类型) {
+  const 已生效 = 模型?.provider && 模型?.model
+  const 选 = 已生效 ? 模型 : await 读模型表(根)
   if (!选?.provider || !选?.model) throw new Error('没有可用的模型')
-  try { return await ctx.llm.resolveCallConfig({ provider: 选.provider, model: 选.model, reasoningEffort: 'low' }) }
-  catch { return await ctx.llm.resolveCallConfig({ provider: 选.provider, model: 选.model }) }
+  const route = { provider: 选.provider, model: 选.model }
+  const effort = 已生效 ? 选.reasoningEffort : ['helm', 'dock'].includes(类型) ? 'max' : 选.reasoningEffort
+  if (effort === undefined) return ctx.llm.resolveCallConfig(route)
+  try { return await ctx.llm.resolveCallConfig({ ...route, reasoningEffort: effort }) }
+  catch { return ctx.llm.resolveCallConfig(已生效 ? route : 选) }
 }
 
-async function 问一次(ctx, 配置, 输入, signal) {
+async function 问一次(ctx, 配置, 输入, signal, 记录请求) {
   const options = { ...配置, ...(输入.system ? { system: 输入.system } : {}), messages: 输入.messages,
-    ...(输入.tools ? { tools: 输入.tools } : {}), maxTokens: 4096, ...(signal ? { signal } : {}) }
+    ...(输入.tools ? { tools: 输入.tools } : {}), ...(输入.toolHistory ? { toolHistory: 输入.toolHistory } : {}),
+    ...(输入.sessionId ? { sessionId: 输入.sessionId } : {}), maxTokens: 4096, ...(signal ? { signal } : {}) }
+  const trace = await 保存选择机请求(options)
+  记录请求(trace)
   const assembler = new BlockAssembler()
-  for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk)
+  let streamError
+  try { for await (const chunk of ctx.llm.stream(options)) assembler.push(chunk) }
+  catch (error) { streamError = new Error(String(error?.message || error)) }
   const finish = assembler.finish
-  if (finish?.kind === 'error' || finish?.kind === 'aborted') throw new Error(finish.failure?.message || finish.kind)
+  if (!streamError && (finish?.kind === 'error' || finish?.kind === 'aborted')) streamError = new Error(finish.failure?.message || finish.kind)
   // 只认文字；带着工具清单，它也可能去调工具，那样就当没认出。
-  return { 文: assembler.blocks().filter(b => b.type === 'text').map(b => b.text).join('').trim(), usage: assembler.usage }
+  return { 文: assembler.blocks().filter(b => b.type === 'text').map(b => b.text).join('').trim(), usage: assembler.usage, trace, error: streamError }
 }
 
 const 文字Of = 们 => 们.flatMap(m => (m.content || []).filter(b => b.type === 'text').map(b => b.text)).join('\n\n')
@@ -120,23 +138,29 @@ const 文字Of = 们 => 们.flatMap(m => (m.content || []).filter(b => b.type ==
  * 选一个阶段：解析不出或不在菜单里重问一次；还不行返回 null（这次不插页）。
  * 每次都记一行，供轨迹检验和界面使用；usage 里的 cacheReadTokens 看得出缓存命中多少。
  */
-export async function 选阶段(ctx, 根, 行, { session, 这一步 = [], signal } = {}) {
+export async function 选阶段(ctx, 根, 行, { session, agent, 这一步 = [], signal } = {}) {
   const 起 = Date.now(), 记 = { at: new Date().toISOString(), node: 行.id, type: 节点类型(行) }
-  let stage = null, attempts = 0, 回答们 = [], usage = [], error
+  let stage = null, attempts = 0, 回答们 = [], usage = [], requests = [], error
   try {
     if (typeof ctx.llm?.stream !== 'function') throw new Error('没有可用的模型')
-    const 输入 = await 选择机输入(根, 行, session, 这一步)
-    const 配置 = await 调用配置(ctx, 根, 输入.模型)
+    const assembly = agent && !session?.requestHeader?.() && typeof ctx.systemPrompt?.assemble === 'function'
+      ? await ctx.systemPrompt.assemble(assembleContextFor(agent, signal)) : undefined
+    const 输入 = await 选择机输入(根, 行, session, 这一步, { assembly })
+    const 配置 = await 调用配置(ctx, 根, 输入.模型, 节点类型(行))
+    记.sessionId = session?.id; 记.provider = 配置.provider; 记.model = 配置.model
+    记.reasoningEffort = 配置.reasoningEffort; 记.maxTokens = 4096
     记.menu = 输入.菜单; 记.messages = 输入.messages.length; 记.tools = 输入.tools?.length || 0
     while (!stage && attempts < 2) {
       attempts++
-      const 回 = await 问一次(ctx, 配置, 输入, signal)
-      回答们.push(回.文.slice(0, 200)); if (回.usage) usage.push(回.usage)
+      const 回 = await 问一次(ctx, 配置, 输入, signal, trace => requests.push({ attempt: attempts, usageIndex: null, ...trace }))
+      回答们.push(回.文.slice(0, 200))
+      if (回.usage) { requests.at(-1).usageIndex = usage.length; usage.push(回.usage) }
+      if (回.error) throw 回.error
       stage = 认阶段(回.文, 输入.菜单)
     }
   } catch (e) { error = String(e?.message || e) }
   await mkdir(join(根, 文档夹名), { recursive: true })
-  await appendFile(选择记录路径(根), JSON.stringify({ ...记, 这次: 文字Of(这一步).slice(0, 120), stage, attempts, answers: 回答们, usage, ms: Date.now() - 起, ...(error ? { error } : {}) }) + '\n').catch(() => {})
+  await appendFile(选择记录路径(根), JSON.stringify({ ...记, 这次: 文字Of(这一步).slice(0, 120), stage, attempts, answers: 回答们, usage, requests, ms: Date.now() - 起, ...(error ? { error } : {}) }) + '\n').catch(() => {})
   return stage
 }
 
@@ -146,10 +170,10 @@ export async function 选阶段(ctx, 根, 行, { session, 这一步 = [], signal
  * 记下这次选了什么，和放进来的那一页的指纹。
  * `转交(stage)` 返回真：这件事交给了别人（交回了的 helm 开新总分身，新 1），不放页、不记到这一行，返回 null。
  */
-export async function 阶段页(ctx, 根, id, { session, 这一步 = [], 重建 = false, signal, 转交, 指定 } = {}) {
+export async function 阶段页(ctx, 根, id, { session, agent, 这一步 = [], 重建 = false, signal, 转交, 指定 } = {}) {
   const 名册 = await 读名册(根), 行 = 行Of(名册, id)
   // `指定`：不问选择机，直接用这一环节（用户亲口说的话直接回话，选 46）。
-  const stage = 指定 || await 选阶段(ctx, 根, 行, { session, 这一步, signal })
+  const stage = 指定 || await 选阶段(ctx, 根, 行, { session, agent, 这一步, signal })
   if (stage && 转交 && await 转交(stage)) return null
   // dock 的 plan 那页后面接分工表的格式，再接 agent 模式那段（叶 5）；helm 的 plan 只派一块总 dock，不接。
   // dock 进 execute：页后接就绪表——它名下登记着的块哪些现在能做、哪些还在等谁（设计页第三版第四节）。表变了页指纹跟着变，整页重给。

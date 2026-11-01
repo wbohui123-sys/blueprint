@@ -38,6 +38,12 @@ async function fixture(t) {
   class Offline extends sdk['dsh-llm'].LlmAdapter {
     async resolveModel(provider, model) { return { provider, id: model, name: model } }
     async *stream(options) {
+      if (options.messages.some(message => message.source?.kind === 'plugin:blueprint-selector')) {
+        yield { type: 'block-start', index: 0, blockType: 'text' }
+        yield { type: 'block-end', index: 0, block: { type: 'text', text: 'execute' } }
+        yield { type: 'finish', reason: { kind: 'stop' } }
+        return
+      }
       requests.push(options)
       const blocks = response && await response(options)
       if (blocks) {
@@ -62,9 +68,8 @@ async function fixture(t) {
   return { ctx, agent, handle, root, requests, respond: fn => { response = fn }, operation: args => 操作持续目标(ctx, agent, args) }
 }
 
-// 选 20：有 Goal 的节点和没有的一样，开头（职责与纸条原文）接在每个 Goal 轮第一步的末尾，系统提示不加持续工作段；
-// 叫醒话原样送，一轮中途到的不插第二份；技能结果不接开头；文档重建照常带开头。清除 Goal 后的普通输入也照样接开头。
-test('Goal 每轮第一步末尾接开头、系统提示不变；中途到的叫醒话原样进、不重复插；技能结果不接开头；清除后照旧', async t => {
+// 新业务输入带完整情境，Goal 自行续轮只插阶段页；用户对既有节点说话只接回话页。
+test('新业务输入接职责原文，Goal 续轮不重复上下文；中途输入和技能结果原样保留，清除后只回话', async t => {
   const f = await fixture(t), gate = Promise.withResolvers()
   t.after(() => gate.resolve())
   const row = 行Of(await 读名册(f.root), '0'), responsibility = '职责原文：核对 {{字面标记}} 与文件入口。'
@@ -85,6 +90,7 @@ test('Goal 每轮第一步末尾接开头、系统提示不变；中途到的叫
     await gate.promise
     return [{ type: 'tool-call', id: sdk['dsh-llm'].ToolCallId('goal-opening-skill'), name: 'skill', arguments: JSON.stringify({ name: 'orient' }) }]
   })
+  f.agent.inject(sdk['dsh-llm'].createUserMessage({ source: { kind: 'plugin:blueprint-node' }, content: [{ type: 'text', text: '开始核对职责和来信' }] }))
   await f.operation({ action: 'create', objective: '核对 Goal 情境', maxGoalRounds: 2 })
   await wait(() => f.requests.length === 1)
   // Goal 第一轮正在跑：叫醒话原样排进 inbox，不在投递时插页。
@@ -103,7 +109,8 @@ test('Goal 每轮第一步末尾接开头、系统提示不变；中途到的叫
   for (const request of f.requests) assert.ok(!request.messages.some(message => message.role === 'system'
     && message.content.some(block => block.text?.includes(fixed))), '系统提示里不再有持续工作判断')
   // 第一轮第一步：Goal 那一轮的提示后面接一份开头，职责与来信原文里的花括号原样保留。
-  const [first] = openings(f.requests[0])
+  const fullOpenings = request => openings(request).filter(message => message.content.some(block => block.text?.includes(fixed)))
+  const [first] = fullOpenings(f.requests[0])
   assert.ok(first, 'Goal 第一轮第一步接开头')
   assert.match(JSON.stringify(first), /职责原文：核对 \{\{字面标记\}\}/)
   assert.match(JSON.stringify(first), /待处理来信的 \{\{字面原文\}\}/)
@@ -113,17 +120,17 @@ test('Goal 每轮第一步末尾接开头、系统提示不变；中途到的叫
   assert.equal(middle.filter(message => JSON.stringify(message.content).includes('本次变化的业务原文')).length, 1)
   assert.equal(middle.filter(message => JSON.stringify(message.content).includes('待处理来信的 {{字面原文}}')).length, 1)
   assert.deepEqual(openings({ messages: middle }), [])
-  // 第二轮：开头按最新职责重新取。
+  // 第二轮没有新输入：仅阶段页，不重复职责、纸条、组织情境。
   const second = added(f.requests[2], f.requests[1])
   assert.ok(second.some(message => message.source?.kind === 'goal' && message.source.round === 2))
-  const [secondOpening, ...extra] = openings({ messages: second })
-  assert.equal(extra.length, 0)
-  assert.match(JSON.stringify(secondOpening), /最新职责：保留 \{\{新的字面标记\}\}/)
-  assert.equal(f.agent.session.ownEvents().filter(event => event.type === 'user/message' && event.data?.source?.kind === `plugin:${思考开头来路}`).length, 2, '两轮各插一次')
+  assert.equal(openings({ messages: second }).length, 1, '续轮仅插阶段页')
+  assert.deepEqual(fullOpenings({ messages: second }), [])
+  assert.equal(fullOpenings(f.requests[2]).length, 1, '历史里的完整情境仍可复用')
+  assert.ok(!JSON.stringify(second).includes('最新职责：保留'), '未发生新业务输入时不重复刷新职责')
   assert.equal((await 读名册(f.root)).rows[0].selector?.pending, undefined, '中途记下的事在第二轮过选择机时清掉')
   const skill = f.agent.session.ownEvents().find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'goal-opening-skill')
   assert.deepEqual(skill.data.message.content, [{ type: 'text', text: '技能页原文' }])
-  // 清除 Goal 后用户再说话：照常接一份开头；用户清除过的 Goal 不替他重建，答完就停。
+  // 清除 Goal 后用户再说话：只接回话页；不替用户重建 Goal，答完就停。
   await f.operation({ action: 'clear', ref: ref(当前持续目标(f.ctx, f.agent)) })
   assert.equal(当前持续目标(f.ctx, f.agent), undefined)
   const 清除前请求 = f.requests.length
@@ -134,6 +141,8 @@ test('Goal 每轮第一步末尾接开头、系统提示不变；中途到的叫
   const afterClear = added(f.requests.at(-1), f.requests.at(-2))
   assert.ok(afterClear.some(message => JSON.stringify(message.content).includes('清除目标后的用户输入')))
   assert.equal(openings({ messages: afterClear }).length, 1)
+  assert.match(openings({ messages: afterClear })[0].content[0].text, /【环节：reply】/)
+  assert.deepEqual(fullOpenings({ messages: afterClear }), [])
   assert.equal(当前持续目标(f.ctx, f.agent), undefined, '用户清除过的 Goal 不重建')
 })
 
@@ -318,7 +327,7 @@ test('查看冷目标只读官方 projection，不恢复 Agent；取消仍释放
   assert.equal(released, 2); assert.equal(f.requests.length, 0)
 })
 
-test('官方自主 complete 结束 Goal，正式责任仍须沿 Blueprint 交回', async t => {
+test('正式节点拒绝 update_goal complete，要求 finish 正式交回且不伪造完成', async t => {
   const f = await fixture(t)
   f.respond(() => {
     if (f.requests.length !== 1) return
@@ -327,10 +336,13 @@ test('官方自主 complete 结束 Goal，正式责任仍须沿 Blueprint 交回
       arguments: JSON.stringify({ goal_id: goal.id, revision: goal.revision, action: 'complete' }) }]
   })
   await f.operation({ action: 'create', objective: '自主收尾核对', maxGoalRounds: 2 })
-  await wait(() => 当前持续目标(f.ctx, f.agent).phase === 'complete' && f.agent.status === 'idle')
-  assert.equal(当前持续目标(f.ctx, f.agent).roundsStarted, 1)
-  assert.equal(f.requests.length, 2, '第二步只承接官方收尾提示')
-  assert.match(JSON.stringify(f.requests[1].messages), /goal_complete/)
+  await wait(() => 当前持续目标(f.ctx, f.agent).blockedReason?.code === 'round-limit' && f.agent.status === 'idle')
+  assert.equal(当前持续目标(f.ctx, f.agent).roundsStarted, 2)
+  assert.equal(f.requests.length, 3, '拒绝完成后仍可继续执行，直到原生轮数上限')
+  const result = f.agent.session.ownEvents().find(event => event.type === 'tool/result' && event.data.message.toolCallId === 'complete-native-goal')
+  assert.equal(result.data.message.isError, true)
+  assert.match(JSON.stringify(result.data.message), /finish/)
+  assert.ok(!JSON.stringify(f.requests).includes('goal_complete'))
   const roster = await (await import('../../blueprint/packages/roster/src/index.js')).读名册(f.root)
   assert.equal(roster.rows[0].status, '开工', 'Goal complete 不能伪造正式交回')
 })

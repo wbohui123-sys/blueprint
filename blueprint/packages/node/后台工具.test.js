@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync, rmSync, realpathSync } from 'node:fs'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { homedir, tmpdir } from 'node:os'
 import { 后台工具环境, 后台工具命令, 用自带浏览器, 找无头专用版 } from './src/后台工具.js'
@@ -182,6 +182,7 @@ test('原生窗口保护不激活、不接收鼠标；重复显示、设置透�
         NSApplication *app=[NSApplication sharedApplication];
         [app setActivationPolicy:NSApplicationActivationPolicyRegular];
         NSWindow *w=[[NSWindow alloc] initWithContentRect:NSMakeRect(20,20,160,120) styleMask:NSWindowStyleMaskTitled backing:NSBackingStoreBuffered defer:NO];
+        [w setReleasedWhenClosed:NO];
         [w setAlphaValue:1];[w setIgnoresMouseEvents:NO];[w makeKeyAndOrderFront:nil];
         [app activateIgnoringOtherApps:YES];[[NSRunningApplication currentApplication] activateWithOptions:NSApplicationActivateIgnoringOtherApps];
         [w makeKeyWindow];[w makeMainWindow];[w orderFrontRegardless];
@@ -289,8 +290,8 @@ func _initialize():
 
 test('实际 Playwright 即使指定 headless=false 也用后台 Chrome 渲染截图并关闭', t => {
   const chrome='/Applications/Google Chrome.app/Contents/MacOS/Google Chrome'
-  const playwright=join(homedir(),'.npm-global/lib/node_modules/@playwright/cli/node_modules/playwright-core/index.js')
-  if(!existsSync(chrome)||!existsSync(playwright))return t.skip('本机未安装 Chrome/Playwright')
+  const playwright=createRequire(new URL('../../../app/package.json',import.meta.url)).resolve('playwright-core')
+  if(!existsSync(chrome))return t.skip('本机未安装 Chrome')
   const root=mkdtempSync(join(repo,'项目/后台浏览器验证-'))
   try {
     const screenshot=join(root,'后台网页截图.png')
@@ -299,7 +300,7 @@ test('实际 Playwright 即使指定 headless=false 也用后台 Chrome 渲染�
         try{const cdp=await browser.newBrowserCDPSession();const {arguments:args}=await cdp.send('Browser.getBrowserCommandLine');if(!args.includes('--headless=new'))throw Error('未启用后台模式');
           const page=await browser.newPage({viewport:{width:320,height:240}});await page.setContent('<html><body style="background:#1252dd"><h1>后台浏览器</h1></body></html>');await page.screenshot({path:${JSON.stringify(screenshot)}});console.log('BACKGROUND_BROWSER_RENDERED=true');
         }finally{await browser.close()}})().catch(e=>{console.error(e);process.exitCode=1})`
-    const scope={根:root,仓库:repo,技能:join(repo,'blueprint/packages/prompt/skill')}
+    const scope={根:root,仓库:repo,技能:join(repo,'blueprint/packages/prompt/skill'),只读代码目录:[dirname(playwright)]}
     const spec=隔离命令({argv:['/bin/bash','-c','"$1" -e "$2"','bash',process.execPath,command],cwd:root},scope)
     const result=spawnSync(spec.argv[0],spec.argv.slice(1),{cwd:spec.cwd,env:{...process.env,...spec.env},encoding:'utf8',timeout:25000})
     assert.equal(result.status,0,result.stderr)

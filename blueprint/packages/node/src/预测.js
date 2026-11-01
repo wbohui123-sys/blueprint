@@ -99,6 +99,7 @@ export async function 检查行动预测(ctx, exec) {
   // subagent 给执行节点（dock、run）做不需要创造力的重活（设计页第三版第三节 plan）；helm 的活交给总 dock。
   if (name === 'subagent' && 节点类型(行) === 'helm') 拒绝行动('SUBAGENT_SCOPE', 'helm 不用 subagent：这一阶段的活用 divide 交给总 dock。')
   if (name === 'skill' && 退役技能名.includes(args.name)) throw new Error(`${args.name} 技能已退役，不能读取。`)
+  if (name === 'verification' && ['collect', 'compare'].includes(args.action)) return { mode: 'entry' }
   if (入口工具.has(name)) return { mode: 'entry' }
   if (name === 'finish' && 行.status === '完成') return { mode: 'entry' }
   if (行.status !== '开工') 拒绝行动('NODE_ACTION_UNAVAILABLE', '本节点已交回，不能继续执行其工作。')

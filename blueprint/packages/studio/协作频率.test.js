@@ -4,7 +4,7 @@ import { mkdtemp, rm } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { 落新名册, 改名册, 加行, 记会话 } from '../roster/src/index.js'
-import { 自动回答 } from '../node/src/回答.js'
+import { 自动回答, 自动对话答复 } from '../node/src/回答.js'
 import { 接问答链 } from './src/问答链.js'
 
 async function fixture(t, mode) {
@@ -41,8 +41,16 @@ test('solo 与 co-create 的原生操作审批走同一通道，模式不额外�
   }
 })
 
-test('solo 不再代答：送到通道的问题留给人工，答了才返回，不报错也不编造（问卡 3）', async t => {
+test('solo 普通问题交回节点自己判断，不编造用户选择或创建人工等待', async t => {
   const f = await fixture(t, 'solo'); f.install('question')
+  const result = await f.run({ agent: { session: { id: 'child-session' } }, questions: [{ id: 'feedback', question: '实际手感怎样？', options: [{ label: '偏重' }] }] },
+    () => assert.fail('solo 普通问题不等待人工'))
+  assert.deepEqual(result.answers[0], { id: 'feedback', selected: [], custom: 自动对话答复 })
+  assert.equal(f.frames.length, 0); assert.equal(f.pending.size, 0); assert.equal(f.answers.size, 0)
+})
+
+test('build 普通问题留给人工，答了才返回，不报错也不编造', async t => {
+  const f = await fixture(t, 'build'); f.install('question')
   const asked = f.run({ agent: { session: { id: 'child-session' } }, questions: [{ id: 'feedback', question: '实际手感怎样？' }] },
     () => assert.fail('人工通道由问答链自己出题'))
   for (let i = 0; i < 100 && !f.frames.length; i++) await new Promise(resolve => setTimeout(resolve, 5)) // 先读名册判断要不要代答

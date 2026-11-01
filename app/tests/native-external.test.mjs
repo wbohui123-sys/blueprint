@@ -9,6 +9,7 @@ import { join, resolve } from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { parse } from 'yaml'
 import { inspectNativeExternalPatch, ensureNativeExternalPatch } from '../scripts/native-external-patch.mjs'
+import { readDesktopComposition } from '../runtime/composition.mjs'
 import { 读取外部协助, 停止外部协助 } from '../../blueprint/packages/studio/src/外部协助.js'
 
 const app = fileURLToPath(new URL('../', import.meta.url)), repo = resolve(app, '..')
@@ -96,12 +97,15 @@ async function fixture(t) {
 
 // 叶 6（2026-10-18）：两家提供方仍随宿主接线；节点组装里不再有调它们的工具，选了它们的 run 由 node 的外部 run 直接用命令行启动。
 test('两家官方提供方随宿主接线、默认权限不变；节点组装里没有调它们的工具', async () => {
-  const host = JSON.parse(await readFile(join(app, 'runtime/host.json'), 'utf8'))
+  const composition = await readDesktopComposition({ resourceRoot: join(app, 'runtime'), sourceRoot: repo,
+    promptDir: join(repo, 'blueprint/packages/prompt'), resolvePlugin: name => pathToFileURL(require.resolve(name)).href })
+  const host = composition.patches.flatMap(row => row.insert || [])
   const yamlOptions = { customTags: [{ tag: 'tag:yaml.org,2002:js', resolve: value => ({ __jsExpr: value }) }] }
   const source = parse(await readFile(join(repo, 'blueprint/cordis.patch.yml'), 'utf8'), yamlOptions).flatMap(row => row.insert || [])
   const preset = parse(await readFile(join(repo, 'blueprint/agent.cordis.yml'), 'utf8'), yamlOptions)
   for (const [id, , toolName, mode] of [['subagent-codex', 'codex', 'subagent_codex', 'dangerously-bypass-approvals-and-sandbox'],
     ['subagent-claude-code', 'claude-code', 'subagent_claude_code', 'acceptEdits']]) {
+    assert.equal(host.filter(row => row.id === id).length, 1, '宿主只组合一份提供方')
     assert.deepEqual(host.find(row => row.id === id), source.find(row => row.id === id))
     assert.equal(host.find(row => row.id === id).config.permissionMode, mode)
     assert.equal(preset.find(row => row.config?.toolName === toolName), undefined, `${toolName} 不再给节点`)

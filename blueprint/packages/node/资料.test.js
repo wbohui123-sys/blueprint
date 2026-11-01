@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, symlink } from 'node:fs/promises'
+import { mkdtemp, mkdir, readFile, readdir, writeFile, rm, symlink, realpath } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join, isAbsolute, relative } from 'node:path'
 import { Context } from '@deepseek-ai/cordis'
@@ -61,7 +61,7 @@ test('真实工具注册与执行：结构化返回也只含片段和文件地�
 })
 
 test('原生 cd 后网页正文、HTML 和回收入口均可直接重读；复用项目相对归档并保留原生历史身份', { timeout: 10000 }, async t => {
-  const root = await mkdtemp(join(项目路径, '资料原文目录入口核对-'))
+  const root = await realpath(await mkdtemp(join(项目路径, '资料原文目录入口核对-')))
   const first = join(root, '取材目录'), second = join(root, '继续工作目录')
   await mkdir(first); await mkdir(second)
   const ctx = new Context()
@@ -121,6 +121,7 @@ test('原生 cd 后网页正文、HTML 和回收入口均可直接重读；复�
   for (const path of [bodyPath, htmlPath]) assert.match(textOf(await invoke('read', { file_path: path, limit: 12 })), /资料关键词与事实/)
   await run('继续处理已读资料')
   assert.equal(requests.length, 3)
+  assert.equal(await 回收已读结果(ctx, agent.session), 1, '归档路径检查显式触发普通工具回收')
   const replacement = agent.session.ownEvents().findLast(event => event.type === 'tool/result')
   assert.ok(replacement.seq > original.seq)
   const reclaimed = replacement.data.message
@@ -195,6 +196,7 @@ test('原生 cd 后网页正文、HTML 和回收入口均可直接重读；复�
   const fullReadSnapshot = structuredClone(fullRead)
   await run('开始消费后的普通结果回收', regular)
   assert.equal(requests.length, 7)
+  assert.equal(await 回收已读结果(ctx, regular.session), 1, '普通工具归档路径检查显式触发回收')
   const readReclaimed = regular.session.ownEvents().findLast(event => event.type === 'tool/result')
   const absoluteText = textOf(readReclaimed.data.message), readPath = absoluteText.match(/原文文件：([^\n]+)/)[1]
   assert.equal(readReclaimed.data.meta?.blueprintArchive, undefined, '普通原生工具 metadata 无 archive 字段且不可补写')
@@ -284,11 +286,12 @@ for (const toolName of ['bash', 'call_tool']) test(`真实会话回收 ${toolNam
 })
 
 /** 往会话里一步步追加模型调用和工具结果；文字Of 取某个结果眼前（surface 上）的文字。 */
-function 记步骤(session) {
+function 记步骤(session, requestHeader) {
   let step = 0
   const 一步 = calls => {
     step++
     session.append('step/start', { turn: 1, step })
+    if (step === 1 && requestHeader) session.append('request/header', { header: requestHeader, reason: 'initial' })
     session.append('assistant/message', { turn: 1, step, stream: [], message: createMessage({ role: 'assistant',
       content: calls.length ? calls.map(([id, name, args]) => ({ type: 'tool-call', id, name, arguments: JSON.stringify(args) }))
         : [{ type: 'text', text: '看过了。' }], source: { kind: 'model', provider: 'test', model: 'test' } }) }, { surfaceOp: 'append' })
@@ -305,6 +308,134 @@ function 记步骤(session) {
   session.append('turn/start', { turn: 1 })
   return { 一步, 文字Of }
 }
+
+const 请求头 = model => ({ config: { provider: 'fixture', model } })
+
+function 自动回收夹具(contextWindows = new Map(), options) {
+  const meterContext = new Context()
+  new SessionProjectionRegistry(meterContext)
+  const meter = new TokenMeter(meterContext)
+  const resolved = []
+  const llm = { async resolveModelInfo(provider, model) {
+    resolved.push({ provider, model })
+    const contextWindow = contextWindows.get(model)
+    return { provider, id: model, name: model, ...(contextWindow === undefined ? {} : { context: { contextWindow } }) }
+  } }
+  let preStep
+  const ctx = {
+    tools: { register() {} },
+    get: name => name === 'tokenMeter' ? meter : undefined,
+    llm,
+    on(event, listener) { if (event === 'agent/pre-step') preStep = listener },
+  }
+  装资料(ctx, options)
+  return {
+    ctx, meter, resolved,
+    enter: session => preStep({ agent: { session }, messages: [], turn: 1, step: session.seq,
+      signal: new AbortController().signal }, async () => ({ kind: 'enter', messages: [] })),
+  }
+}
+
+test('自动回收在低压力或模型容量未知时保留前缀，并在低压力下修复安全的旧入口', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'blueprint-auto-reclaim-low-'))
+  const windows = new Map(), fixture = 自动回收夹具(windows)
+  const full = 'low pressure evidence\n'.repeat(300)
+  try {
+    const low = sessionAt(root), { 一步, 文字Of } = 记步骤(low, 请求头('low'))
+    const original = 一步([['low-read', 'read', {}, full]])
+    一步([])
+    const before = structuredClone(low.deriveMessages()), beforeSeq = low.seq
+    windows.set('low', Math.ceil(fixture.meter.measure(low, low.requestHeader()).totalTokens * 2))
+    await fixture.enter(low)
+    assert.equal(low.seq, beforeSeq)
+    assert.deepEqual(low.deriveMessages(), before, '低压力请求保留原生消息前缀')
+    assert.equal(文字Of(original['low-read']), full)
+    assert.equal(low.ownEvents().filter(event => event.type === 'compaction/prune').length, 0)
+    assert.deepEqual(fixture.resolved.at(-1), { provider: 'fixture', model: 'low' }, '用持久 request/header 解析准确路由')
+
+    const unknown = sessionAt(root), unknownSteps = 记步骤(unknown, 请求头('unknown'))
+    const unknownResult = unknownSteps.一步([['unknown-read', 'read', {}, full]])
+    unknownSteps.一步([])
+    const unknownBefore = structuredClone(unknown.deriveMessages()), unknownSeq = unknown.seq
+    await fixture.enter(unknown)
+    assert.equal(unknown.seq, unknownSeq)
+    assert.deepEqual(unknown.deriveMessages(), unknownBefore)
+    assert.equal(unknownSteps.文字Of(unknownResult['unknown-read']), full)
+    assert.equal(unknown.ownEvents().filter(event => event.type === 'compaction/prune').length, 0)
+    assert.deepEqual(fixture.resolved.at(-1), { provider: 'fixture', model: 'unknown' })
+
+    assert.equal(await 回收已读结果(fixture.ctx, low), 1, '显式调用仍强制回收')
+    const reclaimed = low.ownEvents().findLast(event => event.type === 'tool/result')
+    const reclaimedText = 工具结果Of(reclaimed).content[0].text
+    const absolutePath = reclaimedText.match(/原文文件：([^\n]+)/)[1]
+    const legacyText = reclaimedText.replace(absolutePath, relative(root, absolutePath))
+    const legacy = low.append('tool/result', { ...reclaimed.data,
+      message: { ...reclaimed.data.message, content: [{ type: 'text', text: legacyText }] } }, {
+      surfaceOp: { op: 'replace', startSeq: reclaimed.seq, endSeq: reclaimed.seq }, sourceEventSeqs: [reclaimed.seq],
+    })
+    const pruneCount = low.ownEvents().filter(event => event.type === 'compaction/prune').length
+    await fixture.enter(low)
+    const upgraded = low.ownEvents().findLast(event => event.type === 'tool/result')
+    assert.ok(upgraded.seq > legacy.seq)
+    assert.ok(工具结果Of(upgraded).content[0].text.includes(`原文文件：${absolutePath}`))
+    assert.equal(low.ownEvents().filter(event => event.type === 'compaction/prune').length, pruneCount, '旧入口修复不 prune')
+    const repairedSeq = low.seq
+    await fixture.enter(low)
+    assert.equal(low.seq, repairedSeq, '已修复入口不重复改写')
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('高压力时批量回收，压力未回落到迟滞水位前不逐步改写', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'blueprint-auto-reclaim-high-'))
+  const windows = new Map(), fixture = 自动回收夹具(windows)
+  const full = name => `${name}\n` + 'evidence line for archival\n'.repeat(220)
+  try {
+    const held = sessionAt(root), heldSteps = 记步骤(held, 请求头('held'))
+    held.append('user/message', createUserMessage({ content: [{ type: 'text', text: 'irreducible context '.repeat(8000) }], source: { kind: 'user' } }), { surfaceOp: 'append' })
+    const heldResults = heldSteps.一步([['held-a', 'read', {}, full('held a')], ['held-b', 'read', {}, full('held b')]])
+    heldSteps.一步([])
+    const pressure = fixture.meter.measure(held, held.requestHeader()).totalTokens
+    windows.set('held', Math.ceil(pressure / 0.8))
+    await fixture.enter(held)
+    assert.equal(held.ownEvents().filter(event => event.type === 'compaction/prune').length, 2, '同一次高压进入批量回收两条结果')
+    assert.match(heldSteps.文字Of(heldResults['held-a']), /^已读长工具结果已回收/)
+    assert.match(heldSteps.文字Of(heldResults['held-b']), /^已读长工具结果已回收/)
+    const afterBatch = fixture.meter.measure(held, held.requestHeader()).totalTokens
+    assert.ok(afterBatch > windows.get('held') * 0.65, '上下文仍高于迟滞重启水位')
+    const heldNext = heldSteps.一步([['held-next', 'read', {}, full('held next')]])
+    heldSteps.一步([])
+    assert.ok(fixture.meter.measure(held, held.requestHeader()).totalTokens > windows.get('held') * 0.75)
+    const heldSeq = held.seq
+    await fixture.enter(held)
+    assert.equal(held.seq, heldSeq, '压力持续高于触发线时等待迟滞，避免逐步改写')
+    assert.equal(held.ownEvents().filter(event => event.type === 'compaction/prune').length, 2)
+    assert.equal(heldSteps.文字Of(heldNext['held-next']), full('held next'))
+    assert.deepEqual(fixture.resolved.at(-1), { provider: 'fixture', model: 'held' })
+
+    const rearm = sessionAt(root), rearmSteps = 记步骤(rearm, 请求头('rearm'))
+    const first = rearmSteps.一步([['rearm-first', 'read', {}, full('rearm first')]])
+    rearmSteps.一步([])
+    const firstPressure = fixture.meter.measure(rearm, rearm.requestHeader()).totalTokens
+    windows.set('rearm', Math.ceil(firstPressure / 0.8))
+    await fixture.enter(rearm)
+    assert.equal(rearm.ownEvents().filter(event => event.type === 'compaction/prune').length, 1)
+    assert.ok(fixture.meter.measure(rearm, rearm.requestHeader()).totalTokens <= windows.get('rearm') * 0.65, '回落到迟滞水位后可以重新武装')
+    const second = rearmSteps.一步([['rearm-second', 'read', {}, full('rearm second')]])
+    rearmSteps.一步([])
+    assert.ok(fixture.meter.measure(rearm, rearm.requestHeader()).totalTokens > windows.get('rearm') * 0.75)
+    await fixture.enter(rearm)
+    assert.equal(rearm.ownEvents().filter(event => event.type === 'compaction/prune').length, 2)
+    assert.match(rearmSteps.文字Of(first['rearm-first']), /^已读长工具结果已回收/)
+    assert.match(rearmSteps.文字Of(second['rearm-second']), /^已读长工具结果已回收/)
+  } finally { await rm(root, { recursive: true, force: true }) }
+})
+
+test('装资料校验压力与迟滞比例', () => {
+  const ctx = { tools: { register() {} }, on() {} }
+  for (const options of [{ 压力比例: 0 }, { 压力比例: 1 }, { 压力比例: Number.NaN }, { 迟滞比例: 0 }, { 迟滞比例: 0.8 }]) {
+    assert.throws(() => 装资料(ctx, options), RangeError)
+  }
+})
 
 test('本会话改过的文件、回收过又来读的那几行，read 原文留着不回收；往后翻的照常回收，留下的之后也不回收', async () => {
   const root = await mkdtemp(join(tmpdir(), 'blueprint-reclaim-editing-'))

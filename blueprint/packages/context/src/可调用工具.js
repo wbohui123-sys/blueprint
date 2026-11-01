@@ -1,7 +1,7 @@
 /** 模型常驻工具与按需目录；完整定义仍在原生工具注册表中。 */
 import { Service } from '@deepseek-ai/cordis'
 
-export const 通用工具名 = Object.freeze(['read', 'bash', 'skill', 'node_doc'])
+export const 通用工具名 = Object.freeze(['read', 'bash', 'skill', 'node_doc', 'wait', 'job_output'])
 export const 工具入口名 = Object.freeze(['tool_info', 'call_tool'])
 
 /** 只读接缝：node 通过服务取得 context 此刻允许显示的定义，不互相 import。 */

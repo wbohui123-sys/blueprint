@@ -67,7 +67,7 @@ function 假模型(回答们, { 只认默认档 = false } = {}) {
     收到, 配置,
     resolveCallConfig: async options => {
       配置.push(options)
-      if (只认默认档 && options.reasoningEffort === 'low') throw new Error('这个模型不认 low')
+      if (只认默认档 && options.reasoningEffort !== undefined) throw new Error('这个模型只认默认档')
       return options
     },
     async *stream(options) {
@@ -196,7 +196,7 @@ test('上一个阶段：有交接写交接；没交接写还没结束；reply、
   assert.equal(上一个阶段Of({ last: 'execute', handoff: '派出：1、2；接着用：无；登记：3；去掉：无。这一批记在第 1 轮。' }), 'execute；交接：派出：1、2；接着用：无；登记：3；去掉：无。这一批记在第 1 轮。', 'execute 里 divide 派出写的交接')
 })
 
-test('选阶段：第一次认不出重问一次，第二次认出就选中，attempts=2；用节点自己的模型、整份 context，思考强度调低', async t => {
+test('选阶段：第一次认不出重问一次，第二次认出就选中，attempts=2；用节点自己的模型、整份 context 与已生效思考档', async t => {
   const 根 = await 小项目(t)
   const llm = 假模型(['我想想……先把方向弄清楚吧', 'plan'])
   const 行 = 行Of(await 读名册(根), '0'), 历史 = 已有历史(), 这一步 = [话('开工。')]
@@ -209,7 +209,7 @@ test('选阶段：第一次认不出重问一次，第二次认出就选中，at
     assert.deepEqual(发.messages.slice(0, -1), 输入.messages.slice(0, -1))
     assert.equal(发.messages.at(-1).content[0].text, 输入.messages.at(-1).content[0].text)
     assert.deepEqual(发.tools, 输入.tools)
-    assert.equal(发.reasoningEffort, 'low')
+    assert.equal(发.reasoningEffort, 'high')
   }
   const [记] = await 记录们(根)
   assert.equal(记.node, '0'); assert.equal(记.type, 'helm'); assert.equal(记.stage, 'plan'); assert.equal(记.attempts, 2)
@@ -239,12 +239,13 @@ test('选阶段：两次都认不出 → null；会话没请求头又没有模�
   assert.match(无表记.error, /没有可用的模型/)
 })
 
-test('选阶段：模型不认 low 就用它的默认档；流报错记进 error、不选', async t => {
+test('选阶段：首轮模型不认 max 就用默认档；流报错记进 error、不选', async t => {
   const 根 = await 小项目(t)
   const 行 = 行Of(await 读名册(根), '0')
   const llm = 假模型(['orient'], { 只认默认档: true })
   assert.equal(await 选阶段({ llm }, 根, 行, { 这一步: [话('开工。')] }), 'orient')
   assert.equal(llm.收到[0].reasoningEffort, undefined)
+  assert.equal(llm.配置[0].reasoningEffort, 'max')
   const 坏流 = { resolveCallConfig: async x => x, async *stream() {
     yield { type: 'finish', reason: { kind: 'error', failure: { message: '上游 502' } } }
   } }
@@ -252,6 +253,24 @@ test('选阶段：模型不认 low 就用它的默认档；流报错记进 error
   const 记 = await 记录们(根)
   assert.equal(记.length, 2)
   assert.match(记[1].error, /上游 502/)
+})
+
+test('选阶段：已有请求头未指定思考档时沿用模型默认，不自行切档', async t => {
+  const 根 = await 小项目(t), llm = 假模型(['plan'])
+  const session = 会话(已有历史(), { config: { provider: 'fixture', model: 'fixture-model' }, tools: [] })
+  assert.equal(await 选阶段({ llm }, 根, 行Of(await 读名册(根), '0'), { session }), 'plan')
+  assert.equal(llm.收到[0].reasoningEffort, undefined)
+})
+
+test('选阶段：首轮不支持 max 时，与主节点一样回退项目模型表的档位', async t => {
+  const 根 = await 小项目(t), llm = 假模型(['plan'])
+  await writeFile(模型表路径(根), JSON.stringify({ provider: 'fixture', model: 'fixture-model', reasoningEffort: 'high' }))
+  llm.resolveCallConfig = async options => {
+    if (options.reasoningEffort === 'max') throw new Error('不支持 max')
+    return { ...options, reasoningEffort: options.reasoningEffort ?? 'medium' }
+  }
+  assert.equal(await 选阶段({ llm }, 根, 行Of(await 读名册(根), '0')), 'plan')
+  assert.equal(llm.收到[0].reasoningEffort, 'high')
 })
 
 test('阶段页：第一次给阶段行＋阶段页全文；同一阶段再选、没重建、页没改过只给一行；页改过、重建或换阶段又给全文', async t => {

@@ -191,7 +191,7 @@ export function 后台工具环境(根, input = {}) {
     BLUEPRINT_BACKGROUND_BIN: tool.bin, ZDOTDIR: tool.zsh, BLUEPRINT_BACKGROUND_ZSH: tool.zsh,
     BLUEPRINT_BACKGROUND_ORIGINAL_ZDOTDIR: input.BLUEPRINT_BACKGROUND_ORIGINAL_ZDOTDIR ?? input.ZDOTDIR ?? process.env.ZDOTDIR ?? '',
     // 交给节点的 Godot 是包装：脚本拿它当可执行文件、中间再过 env 也照样后台。
-    BLUEPRINT_BACKGROUND_GODOT: tool.godot ? join(tool.bin, 'godot') : '', BLUEPRINT_BACKGROUND_CHROME: tool.chrome,
+    BLUEPRINT_BACKGROUND_GODOT: join(tool.bin, 'godot'), BLUEPRINT_BACKGROUND_CHROME: tool.chrome,
     BLUEPRINT_BACKGROUND_PLAYWRIGHT: tool.playwright, BLUEPRINT_BACKGROUND_OPEN: tool.open,
     PLAYWRIGHT_MCP_HEADLESS: 'true', MPLBACKEND: 'Agg',
     ...(tool.chrome ? { HARNESS_CHROME: tool.browser } : {}),

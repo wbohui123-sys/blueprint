@@ -106,7 +106,7 @@ test('打开图片沿当前记录会话，网页走原浏览器入口，危险�
 });
 
 test('对话视频与音频沿文件廊同一预览地址，内置浏览器接受，应用同源地址仍被拒绝', async () => {
-  const require = createRequire(new URL('../../../.dsh/profiles/web/package.json', import.meta.url));
+  const require = createRequire(new URL('../../../app/package.json', import.meta.url));
   const browser = readFileSync(require.resolve('@deepseek-ai/dsh-client-ui-sidebar-browser/client'), 'utf8');
   const parseStart = browser.indexOf('\t\tfunction parseBrowserAddress('), parseEnd = browser.indexOf('\t\t//#endregion', parseStart);
   assert.ok(parseStart >= 0 && parseEnd > parseStart);

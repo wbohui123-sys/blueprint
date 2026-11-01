@@ -99,7 +99,7 @@ async function 只卡在等待(ctx, session) {
   let 根
   try { 根 = 项目根(ctx, session.id) } catch { return false }
   const 名册 = await 读名册(根), 我 = 名册 && 我是谁(名册, session.id)
-  return !!我 && !等前置(名册, 我).length && !等开工孩子(名册, 我).length
+  return !!我 && 行Of(名册, 我).status === '开工' && !等前置(名册, 我).length && !等开工孩子(名册, 我).length
 }
 /** 用户自己说的话（不含 Goal 面板的恢复、机器的叫醒）。 */
 const 用户说话 = messages => (messages || []).some(m => (m.role === undefined || m.role === 'user') && ['user', 'api'].includes(m.source?.kind))
@@ -107,8 +107,15 @@ const 是纸条调用 = exec => exec.name === 'note' || (exec.name === 'call_too
 
 /** 这一步带来了新事：纸条、回条、叫醒话、用户的话（Goal 自己开的那一轮不算）。 */
 const 有新事 = messages => (messages || []).some(m => !(m.source?.kind === 'goal' && m.source.round > 0))
-/** 送来了纸条（不是回条）：等着条件时送得进来的只有求助和出事了的传达（纸条.js），它得回。 */
+/** 条件等待时获准投递的纸条：求助、出事通知或上级传达；回条不冒充条件结果。 */
 const 来了纸条 = messages => (messages || []).some(m => /^blueprint-note:.+:note$/.test(m.source?.summary || ''))
+
+/** 补启和 pre-step 共用：新事可处理一轮，登记的等待不解除，正式开工限制不绕过。 */
+export async function 等待允许输入(ctx, session, messages, 条件) {
+  条件 ??= await 运行卡点(ctx, session)
+  return ((用户说话(messages) || 来了纸条(messages)) && await 只卡在等待(ctx, session))
+    || (!条件.length && 有新事(messages))
+}
 
 export function 装纸条等待(ctx) {
   装会话事实(ctx)
@@ -118,9 +125,8 @@ export function 装纸条等待(ctx) {
     const 条件 = await 运行卡点(ctx, agent?.session)
     if (!等待.length && !条件.length) return next()
     if (await 放行中(ctx, agent, turn)) return next()
-    // 只在等回条、又有新事来：照样醒，它可以先回别人；自己卡住的那件活等回条到了再接着做（选 18）。
-    // 用户说话、来了求助：等着条件也照样醒、过选择机（选 23；求助是根二 10-24 加的），登记着的等待不动。
-    if (((用户说话(messages) || 来了纸条(messages)) && await 只卡在等待(ctx, agent.session)) || (!条件.length && 有新事(messages))) {
+    // 等回条时处理新事；条件等待时处理用户输入和获准投递的纸条，原等待保持不变。
+    if (await 等待允许输入(ctx, agent.session, messages, 条件)) {
       放行的轮.set(agent, { turn, 等待: await 等待号(ctx, agent.session) })
       return next()
     }

@@ -13,7 +13,8 @@ function load() {
   const react = { Fragment: 'Fragment', createContext: () => ({ Provider: 'Provider' }), useContext: () => null,
     useRef: current => ({ current }), useLayoutEffect: () => {}, useEffect: () => {}, useCallback: fn => fn }
   const context = vm.createContext({ h: (type, props, ...children) => ({ type, props, children }), react,
-    BlueprintChatMaterials: 'Materials', ChatFlow: 'ChatFlow', 连接对话滚动: () => {} })
+    BlueprintChatMaterials: 'Materials', ChatFlow: 'ChatFlow', 连接对话滚动: () => {}, useBlueprintPresentation() {},
+    require: () => ({ createSnapshotStore: initial => ({ getSnapshot: () => initial, set() {}, subscribe: () => () => {} }) }) })
   vm.runInContext([take('verbOf'), take('参数里的文件'), source, 'this.api = { 阶段切换, 同一切换, 插阶段线, 注册对话呈现 };'].join('\n'), context)
   return context.api
 }
@@ -95,10 +96,11 @@ test('对话流外面套上这一份换阶段表', () => {
   const api = load()
   const native = { options: {}, component: () => null }
   const slots = { entries: name => name === 'conversation.chat.flow' ? [native] : [], subscribe: () => () => {}, inject: () => {} }
-  api.注册对话呈现({ get: () => undefined, effect: fn => fn(), slots })
+  api.注册对话呈现({ get: () => undefined, effect: fn => fn(), slots,
+    inject(deps, callback) { assert.deepEqual([...deps], ['uiWorkspace', 'sessions']); return callback(this) } })
   const 快 = 一段对话()
   const 画出 = native.component({ sessionId: 's', t: key => key, useChat: select => select(快) })
-  const 提供 = 画出.children[1].children[0]
+  const 提供 = 画出.children[1].children[0].children[0]
   assert.equal(提供.type, 'Provider')
   assert.equal(提供.props.value.get(8), 'reply')
   assert.equal(提供.children[0].type, 'ChatFlow')

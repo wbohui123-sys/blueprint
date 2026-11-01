@@ -86,15 +86,21 @@ test('外部 run 交回带 parts：记进整合表，写坏的那一行丢掉；
 
 // 10-25 用户：外部 run 做完时先从「在做」闪一下红色停止再变完成。进程退出到交回落进名册要几秒，这段要记着「收尾中」，
 // 界面照旧画在做；收尾记号撤掉的那一下，名册上已经交回了。
-test('进程退出到交回落进名册之间记着收尾中，不出现「running 却没进程」那一下；撤掉收尾时已经交回', async t => {
+test('进程退出到交回落进名册之间记着收尾中，不出现「running 却没进程」那一下；撤掉收尾时已经交回', { timeout: 15000 }, async t => {
   const f = await fixture(t, 'codex', [{ write: { 'out.txt': '做好了\n' }, answer: { result: 'achieved', handoff: '改好了。' } }])
   const 看到 = []
+  const 释放 = Promise.withResolvers()
+  let 见过收尾 = false
   t.after(听外部run变化(() => {
     const 在跑 = 外部run在跑(f.根, '1.1'), 收尾 = 外部run收尾中(f.根, '1.1')
     看到.push(行(f, '1.1').then(r => ({ 在跑, 收尾, 状态: r.status, state: r.external?.state }), () => ({ 在跑, 收尾 })))
+    if (收尾) 见过收尾 = true
+    if (见过收尾 && !在跑 && !收尾) 释放.resolve()
   }))
   await 派(f, [块('改代码', { executor: 'codex' })])
   await 交回了(f, '1.1')
+  // 名册完成先于 finally 的收尾通知；等到被核验的真实事件，不能提前截取通知列表。
+  await 释放.promise
   const 记 = await Promise.all(看到)
   assert.ok(记.some(x => x.在跑), '开工时喊过一声')
   assert.ok(记.some(x => !x.在跑 && x.收尾), '进程退出那一下记着收尾中')

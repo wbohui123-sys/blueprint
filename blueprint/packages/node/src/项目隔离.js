@@ -227,6 +227,8 @@ export function 隔离规则({ 根, 仓库, 技能, 保护根 = [仓库], 私人
     `(allow file-write* ${缓存.根们.map(path => `(subpath ${引号(path)})`).join(' ')})`,
     // 项目外只额外允许当前用户的原生临时目录和缓存；软链接目标仍受内核边界检查。
     `(deny file-write* (require-all (require-not (subpath ${引号(根)})) (require-not (literal "/dev/null")) (require-not (subpath ${引号(系统临时目录())})) ${缓存.根们.map(path => `(require-not (subpath ${引号(path)}))`).join(' ')} ${可写缓存目录.map(path => `(require-not (subpath ${引号(path)}))`).join(' ')} ${可写缓存文件.map(path => `(require-not (literal ${引号(path)}))`).join(' ')}))`,
+    // 项目位置可设在临时目录或缓存下；这些通用写权限不能覆盖邻居项目与宿主账本的保护。
+    ...(保护根.length ? [`(deny file-write* (require-all (require-any ${保护根.map(path => `(subpath ${引号(path)})`).join(' ')}) (require-not (subpath ${引号(根)}))))`] : []),
     // 缓存里 Blueprint、dsh 自己的和各 App 的更新状态照旧不能写。
     `(deny file-write* ${缓存.自己的式.map(式 => `(regex ${引号(式)})`).join(' ')})`,
     // 目标路径也拒绝原子替换；即便用户把原生配置放在项目内，仍不能由产品任务改写登录和设置。
@@ -246,9 +248,10 @@ export function 隔离规则({ 根, 仓库, 技能, 保护根 = [仓库], 私人
 export function 隔离命令(spec, 范围) {
   if (process.platform !== 'darwin') throw new Error('PROJECT_ISOLATION: 当前部署的硬隔离仅支持 macOS；拒绝无隔离执行。')
   const cwd = 文件许可(范围, spec.cwd || 范围.目录 || 范围.根, false, 范围.目录 || 范围.根)
-  // 用户 PTY 保留自己的交互环境；项目内核边界不依赖模型的后台启动入口。
-  const 后台环境 = 范围.用户终端 ? { ...spec.env } : 后台工具环境(范围.根, spec.env)
-  const argv = 范围.用户终端 ? [...spec.argv] : 后台工具命令(spec.argv, 后台环境)
+  // 用户 PTY 与宿主管理的原生命令自行管理启动；后者仍遵守工具的私人目录限制。
+  const 原样启动 = 范围.用户终端 || 范围.原生命令
+  const 后台环境 = 原样启动 ? { ...spec.env } : 后台工具环境(范围.根, spec.env)
+  const argv = 原样启动 ? [...spec.argv] : 后台工具命令(spec.argv, 后台环境)
   // 原生 glob 的排序先 stat 当前 rg 可执行文件；只给这一个实际入口与祖先元数据，正文仍受隔离。
   const program = argv[argv[0] === 'sandbox-exec' || argv[0] === '/usr/bin/sandbox-exec' ? 3 : 0]
   const position = argv[0] === 'sandbox-exec' || argv[0] === '/usr/bin/sandbox-exec' ? 3 : 0

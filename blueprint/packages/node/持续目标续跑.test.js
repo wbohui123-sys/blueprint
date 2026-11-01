@@ -466,7 +466,7 @@ test('helm 和总 dock 同一套父子循环：总 dock 做完就交回，交齐
   assert.equal(f.请求们('0').filter(r => 文字(新增(r, f.请求们('0')[f.请求们('0').indexOf(r) - 1])).includes('本次分工的直接子节点都交回了')).length, 1, '总 dock 交回只叫醒 helm 一次')
   const helm看到 = f.请求们('0').map(r => 文字(r.messages)).find(t => t.includes('本次分工的直接子节点都交回了')) || ''
   assert.ok(helm看到.includes('1 号这一阶段做好了'), '交齐汇总里有总 dock 的交回')
-  assert.ok(f.选择们('0').some(s => s.text.includes('orient、plan、execute、integrate、complete、reply')), '总 dock 走 dock 的菜单')
+  assert.ok(f.选择们('1').some(s => s.text.includes('orient、plan、execute、integrate、complete、reply')), '总 dock 走 dock 的菜单')
   assert.ok(f.选择们('0').some(s => s.text.includes('orient、plan、execute、complete、reply')), 'helm 的菜单没有 integrate')
   for (const id of ['0', '1']) assert.equal(当前持续目标(f.ctx, f.agents.get(id)).phase, 'complete')
   assert.deepEqual(f.failures, [])

@@ -45,6 +45,7 @@ export { 删除项目 } from './删除项目.js'
 import { 装项目隔离, 原生提供方代码目录 } from './项目隔离.js'
 import { 检查行动预测 } from './预测.js'
 import { 装资料 } from './资料.js'
+import { 装验证收据 } from './验证收据.js'
 import { 装素材目录 } from './素材目录.js'
 import { 装上架工具 } from './上架.js'
 import { 装媒体工具 } from './媒体工具.js'
@@ -72,7 +73,7 @@ export { 操作持续目标 } from './持续工作.js'
 /** Cordis 插件名。 */
 export const name = 'blueprint-node'
 
-export const inject = ['tools', 'sessions', 'llm', 'agents', 'commands', 'fs', 'subprocess', 'web', 'tokenMeter', 'blueprintToolCatalog', 'subagents']
+export const inject = ['tools', 'sessions', 'llm', 'agents', 'commands', 'fs', 'subprocess', 'web', 'tokenMeter', 'blueprintToolCatalog', 'subagents', 'systemPrompt']
 
 /** 新项目使用持久化的默认位置；已有项目继续按自己的会话 cwd 工作。 */
 export { 项目夹 }
@@ -342,6 +343,7 @@ export function apply(ctx, config = {}) {
     ...Object.values(config.externalProviderEntries || []), ...Object.values(config.executionRuntimeEntries || []),
   ]), ...(ctx.get('blueprintExecutionFeatures')?.readOnlyRoots || [])] })
   装资料(ctx)
+  装验证收据(ctx)
   装媒体工具(ctx)
   装网页截图(ctx)
   装工具(ctx)

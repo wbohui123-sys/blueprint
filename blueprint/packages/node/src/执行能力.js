@@ -14,7 +14,7 @@ import { 装后台清理 } from './后台清理.js'
 import { 用自带浏览器, 找无头专用版 } from './后台工具.js'
 
 export const name = 'blueprint-execution-features'
-export const inject = ['agents', 'subagents', 'sessions', 'agentPresets']
+export const inject = ['agents', 'subagents', 'sessions', 'agentPresets', 'tools']
 
 class 执行能力服务 extends Service {
   constructor(ctx, config, modules) {
@@ -99,20 +99,22 @@ class 执行能力服务 extends Service {
     const cleanup = () => rm(sockets, { recursive: true, force: true })
     context.effect(() => cleanup)
     handles.push({ dispose: cleanup })
-    const scope = context.isolate('browserUse'), plugin = scope.plugin, readOnlyRoots = this.readOnlyRoots
-    // 官方 MCP SDK 管运输和进程；这里只给它同一项目的宿主启动边界。
-    scope.plugin = function (entry, config) {
+    const scope = context.isolate('browserUse'), readOnlyRoots = this.readOnlyRoots
+    // MCP 与浏览器子进程继承项目 Seatbelt；macOS 不允许内层再应用 Chromium 的另一份策略。
+    // 显式遮蔽本作用域的方法；给 ctx.plugin 赋值会改写共享 registry 的 accessor。
+    Object.defineProperty(scope, 'plugin', { value: function (entry, config) {
       if (entry?.name === 'mcp-client' && config?.serverName === 'playwright-mcp') {
-        const spec = 隔离命令({ argv: [config.command, ...(config.args || []), '--output-dir', temporary], cwd: config.cwd,
+        const spec = 隔离命令({ argv: [config.command, ...(config.args || []), '--no-sandbox', '--output-dir', temporary], cwd: config.cwd,
           env: { ...config.env, TMPDIR: temporary, TMP: temporary, TEMP: temporary, PWTEST_SOCKETS_DIR: sockets,
             PLAYWRIGHT_BROWSERS_PATH: join(temporary, 'playwright-cache') } }, {
           根: root, 仓库: 数据根, 技能: 技能路径, 保护根: [数据根, 仓库根, ...项目位置们()], 只读代码目录: readOnlyRoots,
-          可写缓存目录: [sockets], 用户终端: true, 管理端口: context.get('webServer')?.port,
+          可写缓存目录: [sockets], 原生命令: true, 管理端口: context.get('webServer')?.port,
         })
-        return plugin.call(this, entry, { ...config, command: spec.argv[0], args: spec.argv.slice(1), env: spec.env })
+        // ctx.plugin 是已绑定的方法；沿当前子作用域取 registry，资源才归其生命周期所有。
+        return this.registry.plugin(entry, { ...config, command: spec.argv[0], args: spec.argv.slice(1), env: spec.env })
       }
-      return plugin.call(this, entry, config)
-    }
+      return this.registry.plugin(entry, config)
+    } })
     handles.push(await scope.plugin(this.modules.browserRegistry))
     handles.push(await scope.plugin(this.modules.browserProvider, { mode: 'launch', headless: true, executablePath: this.config.browserExecutable }))
   }
@@ -153,10 +155,11 @@ export async function apply(ctx, config) {
   })
   if (browser && (browser.platform !== process.platform || browser.arch !== process.arch
     || browser.executable.startsWith('/') || browser.executable.split(/[\\/]/).includes('..'))) throw new Error('浏览器资源与本机不符')
+  const headlessShell = 找无头专用版(join(resources, 'browser'))
   config = { ...config, primaryRuntime: join(resources, 'primary-runtime'), officeAssets: join(resources, 'office-skills'),
-    browserExecutable: browser ? join(resources, 'browser', browser.executable) : null,
+    browserExecutable: headlessShell || (browser ? join(resources, 'browser', browser.executable) : null),
     readOnlyRoots: [modulesRoot, ...(await stat(resources).catch(() => null) ? [resources] : [])] }
-  用自带浏览器(找无头专用版(join(resources, 'browser')))
+  用自带浏览器(headlessShell)
   const modules = Object.fromEntries(await Promise.all(Object.entries(config.entries).map(async ([key, path]) => {
     const entry = await import(path); return [key, entry.default || entry]
   })))

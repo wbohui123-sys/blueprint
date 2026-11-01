@@ -16,6 +16,7 @@ import { 准备节点Git空间, 提交节点空间, 节点成果版本 } from '.
 import { 检查产物 } from '../../blueprint/packages/node/src/产物.js'
 import { 安全产物文件, 汇集产物, 产物引用 } from '../../blueprint/packages/studio/src/产物.js'
 import { 发送预览文件 } from '../../blueprint/packages/studio/src/预览.js'
+import { fixtureProjectRoot } from './project-fixture-root.mjs'
 
 const appRoot = fileURLToPath(new URL('../', import.meta.url))
 const repo = resolve(appRoot, '..')
@@ -34,8 +35,7 @@ async function git(cwd, ...args) {
 }
 
 async function fixture(t) {
-  await mkdir(join(repo, '项目'), { recursive: true })
-  const root = await realpath(await mkdtemp(join(repo, '项目/.原生工作树核验-')))
+  const root = await realpath(await mkdtemp(join(fixtureProjectRoot, '.原生工作树核验-')))
   const home = await realpath(await mkdtemp(join(tmpdir(), 'blueprint-native-worktree-profile-')))
   let ctx
   const previousHome = process.env.DSH_HOME

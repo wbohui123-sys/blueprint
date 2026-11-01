@@ -88,7 +88,7 @@ test('真实建项目在启动首节点前写入默认，下一轮沿用，改�
       console.log(JSON.stringify({beforeFirstNode:true,nextCreation:true,existingProjectsIndependent:true,explicitSettingsPreferred:true,savedProjectPreferencesInherited:true}));
     } finally {for(const off of f.收.效果.reverse())off();}
   `
-  const result = await run(process.execPath, ['--input-type=module', '-e', script], { cwd: repository, timeout: 45000,
+  const result = await run(process.execPath, ['--import', new URL('../../../app/scripts/native-node-protocol-check.mjs?register', import.meta.url).href, '--input-type=module', '-e', script], { cwd: repository, timeout: 45000,
     env: { ...process.env, BLUEPRINT_DATA_HOME: join(base, '应用数据'), BLUEPRINT_DOCUMENTS_HOME: join(base, '文稿') } })
   assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').at(-1)), {
     beforeFirstNode: true, nextCreation: true, existingProjectsIndependent: true, explicitSettingsPreferred: true, savedProjectPreferencesInherited: true,

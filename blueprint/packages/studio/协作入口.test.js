@@ -66,7 +66,7 @@ test('关闭后处理本项目正在等待及暂停恢复的提问、审核和�
   assert.equal(saved.find(([name]) => name === 'permission')[1], 'allowed-once')
   assert.equal(delivered.length, 3); assert.equal(delivered[0].frame.rpcId, 'paused')
   const ordinary = delivered.find(record => record.frame.rpcId === 'ordinary'), dialog = delivered.find(record => record.frame.rpcId === 'dialog')
-  assert.deepEqual(ordinary.answer.answers[0].selected, ['A']); assert.equal(ordinary.automatic, true)
+  assert.deepEqual(ordinary.answer.answers[0].selected, []); assert.equal(ordinary.answer.answers[0].custom, 自动对话答复); assert.equal(ordinary.automatic, true)
   assert.equal(dialog.answer.answers[0].custom, 自动对话答复); assert.equal(dialog.automatic, true)
   assert.match(恢复回答正文(dialog), /系统对暂停前问题的自动答复/)
   assert.doesNotMatch(恢复回答正文(dialog), /用户回话|系统自动通过的结果/)

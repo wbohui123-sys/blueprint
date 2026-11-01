@@ -21,6 +21,7 @@ import { 叫醒来路, 重建叫醒, 用户续工来路, 用户停下的 } from 
 import { 关闭节点终端 } from './终端.js'
 import { 离开工具执行 } from './项目隔离.js'
 import { 送未送纸条, 原生输入已收, 在等回条 } from './纸条.js'
+import { 等待允许输入 } from './纸条等待.js'
 import { 准备节点Git空间, 节点工作目录, 接着做前并入话 } from './节点Git空间.js'
 import { 在等条件, 运行卡点, 复查项目等待 } from './条件等待.js'
 import { 记节点起点 } from './节点起点.js'
@@ -466,7 +467,7 @@ async function 停稳后补启(ctx, agent, message, stopped) {
     try { ctx.fiber?.assertActive(); agent.ctx?.fiber?.assertActive() } catch { return false }
     return ctx.root.agents.get(agent.session.id) === agent && agent.status === 'idle' && !stopped()
   }
-  if (!active() || (await 运行卡点(ctx, agent.session)).length) return
+  if (!active() || !await 等待允许输入(ctx, agent.session, [message])) return
   let root
   try { root = 项目根(ctx, agent.session.id) } catch { return }
   const roster = await 读名册(root), id = roster && 我是谁(roster, agent.session.id)

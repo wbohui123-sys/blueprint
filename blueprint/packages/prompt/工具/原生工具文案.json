@@ -6,7 +6,7 @@
       "description": "Brief action shown in the UI.",
       "timeoutMs": "Milliseconds; configured default/cap; expiry kills the command.",
       "workdir": "Default current working directory; relative paths resolve from it.",
-      "run_in_background": "For long work: return job id, collect via job_output, stop via job_kill; no timeout.",
+      "run_in_background": "For long work: return job id, collect via job_output, stop via job_kill; no timeout. When the next step depends on completion, use wait with a job condition, then read the result; no sleep polling.",
       "sandbox_permissions": "Exact denied-operation retry only, with justification and user approval.",
       "justification": "Why this exact operation needs wider access."
     }
@@ -60,7 +60,7 @@
     }
   },
   "job_output": {
-    "description": "Read job output. Streams return new output; final-output jobs return after settlement. Check [status: ...]. Non-blocking unless wait=true; timeout leaves the job running.",
+    "description": "Read job output. Streams return new output; final-output jobs return after settlement. Check [status: ...]. Non-blocking unless wait=true; timeout leaves the job running. For completion dependencies use wait with a job condition; read intermediate output only when it changes a decision.",
     "parameters": {
       "job_id": null,
       "wait": "Default false.",

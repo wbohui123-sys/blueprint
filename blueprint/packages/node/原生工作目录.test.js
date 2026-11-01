@@ -25,9 +25,9 @@ import * as ToolBash from '@deepseek-ai/dsh-tool-bash'
 import * as ToolWorkingDirectory from '@deepseek-ai/dsh-tool-working-directory'
 import Subagents from '@deepseek-ai/dsh-subagent'
 import * as Spawn from '@deepseek-ai/dsh-subagent-spawn-in-process'
-import { 项目路径, 技能路径, 仓库根, 数据根 } from '../prompt/src/路径.js'
+import { 项目路径, 技能路径, 仓库根, 数据根, 项目位置们 } from '../prompt/src/路径.js'
 import { 只回一段字 } from '../prompt/src/index.js'
-import { 装项目隔离, 工具执行目录, 文件许可, 隔离命令, 隔离规则 } from './src/项目隔离.js'
+import { 装项目隔离, 工具执行目录, 文件许可, 隔离命令, 隔离规则, 真路径 } from './src/项目隔离.js'
 import { 进入产物空间 } from './src/会话.js'
 
 const 文本 = result => result.content.filter(block => block.type === 'text').map(block => block.text).join('\n')
@@ -173,7 +173,7 @@ test('原生 glob 排序只获得内置 rg 的精确元数据，程序正文及�
   const require = createRequire(import.meta.resolve('@deepseek-ai/dsh-tool-fs-search'))
   const program = await realpath(require('@vscode/ripgrep').rgPath)
   const scope = { 根: f.root, 仓库: await realpath(数据根), 技能: await realpath(技能路径),
-    保护根: [...new Set([await realpath(数据根), await realpath(仓库根)])], 搜索: true }
+    保护根: [...new Set([await realpath(数据根), await realpath(仓库根), ...项目位置们().map(真路径)])], 搜索: true }
   const spec = 隔离命令({ argv: [program, '--files', '--sort=modified', '--glob', '当前样本.txt'], cwd: f.first }, scope)
   const result = spawnSync(spec.argv[0], spec.argv.slice(1), { cwd: spec.cwd, env: { ...process.env, ...spec.env }, encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)

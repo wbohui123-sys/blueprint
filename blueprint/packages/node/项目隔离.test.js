@@ -13,8 +13,11 @@ import { Context } from '@deepseek-ai/cordis'
 import LocalFS from '@deepseek-ai/dsh-fs-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
 import WebServer from '@deepseek-ai/dsh-host-webserver'
+import { 数据根 } from '../prompt/src/路径.js'
 
 const repo = realpathSync(fileURLToPath(new URL('../../..', import.meta.url)))
+mkdirSync(join(数据根, '项目'), { recursive: true })
+const projects = realpathSync(join(数据根, '项目'))
 
 test('会话附件只接受收到的原件与同项目父链，普通文件工具只读，不能猜其他附件或访问其目录', () => {
   const base = realpathSync(mkdtempSync(join(tmpdir(), 'Blueprint 节点附件只读-')))
@@ -41,7 +44,7 @@ test('会话附件只接受收到的原件与同项目父链，普通文件工�
 })
 
 test('真实内核：收到的附件可读和复制到项目，宿主附件目录、其他附件与原件写入仍拒绝', () => {
-  const base = mkdtempSync(join(repo, '项目/.attachment-isolation-'))
+  const base = mkdtempSync(join(projects, '.attachment-isolation-'))
   try {
     const own = join(base, '本项目'), store = join(base, '宿主附件')
     mkdirSync(own); mkdirSync(store)
@@ -61,7 +64,7 @@ test('真实内核：收到的附件可读和复制到项目，宿主附件目�
 })
 
 test('真实内核：项目可读写；邻居、父目录、账本和软链接不可读，已有沙箱不能绕过', () => {
-  const base = mkdtempSync(join(repo, '项目/.isolation-test-'))
+  const base = mkdtempSync(join(projects, '.isolation-test-'))
   const own = join(base, 'own'), other = join(base, 'other')
   const skills = join(base, 'skills')
   mkdirSync(own); mkdirSync(other); mkdirSync(skills)
@@ -98,7 +101,7 @@ test('真实内核：项目可读写；邻居、父目录、账本和软链接�
 })
 
 test('真实内核：用户的个人文件夹不能列目录和读内容，项目在里面照常读写，用户终端不受这层限制', () => {
-  const base = mkdtempSync(join(repo, '项目/.private-folders-'))
+  const base = mkdtempSync(join(projects, '.private-folders-'))
   try {
     const home = join(base, 'home'), desktop = join(home, 'Desktop'), documents = join(home, 'Documents')
     const own = join(documents, 'Blueprint/项目/own'), skills = join(base, 'skills')
@@ -124,6 +127,16 @@ test('真实内核：用户的个人文件夹不能列目录和读内容，项�
     assert.equal(run(['/bin/cat', join(own, 'ok')]).stdout, 'own')
     assert.equal(run(['/bin/sh', '-c', 'echo changed > ok && cat ok']).stdout.trim(), 'changed')
     assert.equal(run(['/bin/cat', join(desktop, '照片.txt')], { 用户终端: true }).stdout, 'PRIVATE')
+    // 原生 MCP 自己管理进程；原样启动不能顺带取得用户终端的私人目录权限。
+    const native = 隔离命令({ argv: ['/bin/true'], cwd: own, env: { NODE_OPTIONS: '--trace-warnings', BROWSER: 'open' } },
+      { ...scope, 原生命令: true })
+    assert.equal(native.env.NODE_OPTIONS, '--trace-warnings')
+    assert.equal(native.env.BROWSER, 'open')
+    assert.equal(native.env.BLUEPRINT_BACKGROUND_TOOLS, undefined)
+    assert.equal(run(['/bin/cat', join(own, 'ok')], { 原生命令: true }).stdout.trim(), 'changed')
+    for (const path of [desktop, join(desktop, '照片.txt'), join(documents, '合同.txt')]) {
+      assert.notEqual(run(['/bin/cat', path], { 原生命令: true }).status, 0, path)
+    }
   } finally { rmSync(base, { recursive: true, force: true }) }
 })
 
@@ -138,7 +151,7 @@ test('个人文件夹默认清单覆盖会触发 macOS 权限框的位置，只�
 })
 
 test('子进程临时目录在各自项目、缓存全机共用，不继承本机代理；环境不修改宿主', () => {
-  const root = mkdtempSync(join(repo, '项目/.isolation-env-')), other = mkdtempSync(join(repo, '项目/.isolation-env-'))
+  const root = mkdtempSync(join(projects, '.isolation-env-')), other = mkdtempSync(join(projects, '.isolation-env-'))
   try {
     const env = { HTTPS_PROXY: 'http://127.0.0.1:7897', PATH: process.env.PATH, UV_CACHE_DIR: '/old/cache', UV_PYTHON_INSTALL_DIR: '/old/python' }
     const spec = 隔离命令({ argv: ['/bin/true'], cwd: root, env }, { 根: root, 仓库: repo, 技能: join(repo, 'blueprint/packages/prompt/skill') })
@@ -165,7 +178,7 @@ test('子进程临时目录在各自项目、缓存全机共用，不继承本�
 })
 
 test('管理端口逐次取原生服务事实，未就绪拒绝工具启动，调用环境不能扩大网络权限', async () => {
-  const root = mkdtempSync(join(repo, '项目/管理端口核对-'))
+  const root = mkdtempSync(join(projects, '管理端口核对-'))
   const specs = [], service = { port: undefined }
   const subprocess = { spawn: spec => { specs.push(spec); return spec } }
   let dispatch, toolStarted = 0
@@ -192,7 +205,7 @@ test('管理端口逐次取原生服务事实，未就绪拒绝工具启动，�
 })
 
 test('用户终端 API 绑定项目与原生当前目录，保留交互环境，不进入模型预测并传播取消', async () => {
-  const root = realpathSync(mkdtempSync(join(repo, '项目/用户终端边界核对-')))
+  const root = realpathSync(mkdtempSync(join(projects, '用户终端边界核对-')))
   const cwd = join(root, '交互工作目录')
   mkdirSync(cwd)
   const subprocess = { spawnTerminal: async spec => spec }, webServer = { port: 23456 }
@@ -284,8 +297,8 @@ main().catch(error => { console.error(error.stack); process.exitCode = 1 })
 `
 
 for (const hostAddress of ['127.0.0.1', '::1']) test(`真实原生服务 ${hostAddress}：项目 HTTP、WebSocket、Unix socket 可用；实际管理端口与邻居 socket 拒绝`, async t => {
-  const root = realpathSync(mkdtempSync(join(repo, '项目/网络-')))
-  const neighbor = realpathSync(mkdtempSync(join(repo, '项目/邻网-')))
+  const root = realpathSync(mkdtempSync(join(projects, '网络-')))
+  const neighbor = realpathSync(mkdtempSync(join(projects, '邻网-')))
   const host = new Context(), processes = []
   const ownSocket = join(root, 'ipc.sock'), neighborSocket = join(neighbor, 'ipc.sock'), socketSymlink = join(root, '旁门.sock')
   assert.ok(Buffer.byteLength(ownSocket) < 104, '本机 Unix socket 使用短真实路径')
@@ -336,7 +349,7 @@ for (const hostAddress of ['127.0.0.1', '::1']) test(`真实原生服务 ${hostA
 test('已安装的 uv 在真实项目隔离内可离线启动 Python，无需写用户缓存', t => {
   const uv = [join(homedir(), '.local/bin/uv'), '/opt/homebrew/bin/uv', '/usr/local/bin/uv'].find(existsSync)
   if (!uv || !existsSync('/usr/bin/python3')) return t.skip('未安装 uv 或系统 Python')
-  const root = mkdtempSync(join(repo, '项目/.uv 中文 空格-'))
+  const root = mkdtempSync(join(projects, '.uv 中文 空格-'))
   try {
     const spec = 隔离命令({ argv: [uv, 'run', '--offline', '--no-project', '--python', '/usr/bin/python3', '--no-python-downloads', 'python', '-c', 'print("uv-ok")'] }, { 根: root, 仓库: repo, 技能: join(repo, 'blueprint/packages/prompt/skill') })
     const result = spawnSync(spec.argv[0], spec.argv.slice(1), { cwd: spec.cwd, env: { ...process.env, ...spec.env }, encoding: 'utf8', timeout: 20000 })
@@ -347,8 +360,8 @@ test('已安装的 uv 在真实项目隔离内可离线启动 Python，无需写
 })
 
 test('工具执行域：并行项目互不混淆，子调用继承；宿主仍可读，两种文件路径都受限', async () => {
-  const a = mkdtempSync(join(repo, '项目/.isolation-a-'))
-  const b = mkdtempSync(join(repo, '项目/.isolation-b-'))
+  const a = mkdtempSync(join(projects, '.isolation-a-'))
+  const b = mkdtempSync(join(projects, '.isolation-b-'))
   writeFileSync(join(a, 'text'), 'a'); writeFileSync(join(b, 'text'), 'b')
   symlinkSync(b, join(a, 'escape'))
   const fs = {
@@ -374,7 +387,7 @@ test('工具执行域：并行项目互不混淆，子调用继承；宿主仍�
 })
 
 test('工具执行里开出或叫醒的节点离开执行域：它的宿主钩子（列技能往上找 .git）不再被当成工具调用拦下', async () => {
-  const a = mkdtempSync(join(repo, '项目/.isolation-leave-'))
+  const a = mkdtempSync(join(projects, '.isolation-leave-'))
   writeFileSync(join(a, 'text'), 'a')
   const fs = { processPath: p => p, readText: async p => readFileSync(p, 'utf8') }
   let dispatch
@@ -391,7 +404,7 @@ test('工具执行里开出或叫醒的节点离开执行域：它的宿主钩�
 })
 
 test('技能目录是宿主的事：工具执行域里（比如 do 那一轮）列技能、读页不被拦，模型自己的读取照样受边界', async () => {
-  const a = mkdtempSync(join(repo, '项目/.isolation-skills-'))
+  const a = mkdtempSync(join(projects, '.isolation-skills-'))
   const fs = { processPath: p => p, readText: async p => readFileSync(p, 'utf8') }
   const 宿主路径 = fileURLToPath(new URL('./package.json', import.meta.url))
   // 假的技能注册表：像 dsh 那样，列技能时去读项目外的东西（往上找 .git、用户 skill 目录）。
@@ -409,8 +422,8 @@ test('技能目录是宿主的事：工具执行域里（比如 do 那一轮）�
 })
 
 test('真实 dsh 服务：读取、搜索进程、shell 与子 shell 均受边界约束', async () => {
-  const a = mkdtempSync(join(repo, '项目/.isolation-live-a-'))
-  const b = mkdtempSync(join(repo, '项目/.isolation-live-b-'))
+  const a = mkdtempSync(join(projects, '.isolation-live-a-'))
+  const b = mkdtempSync(join(projects, '.isolation-live-b-'))
   writeFileSync(join(a, 'text'), 'own'); writeFileSync(join(b, 'text'), 'private')
   mkdirSync(join(a, 'demo 中文 空格'))
   const host = new Context()
@@ -447,7 +460,7 @@ test('真实 dsh 服务：读取、搜索进程、shell 与子 shell 均受边�
 
 
 test('原生系统临时目录可写，临时软链接不能写入其他项目或宿主目录', () => {
-  const base = mkdtempSync(join(repo, '项目/.isolation-native-temp-'))
+  const base = mkdtempSync(join(projects, '.isolation-native-temp-'))
   const native = mkdtempSync(join(系统临时目录(), 'blueprint-export-test-'))
   const own = join(base, 'own'), other = join(base, 'other')
   mkdirSync(own); mkdirSync(other)
@@ -470,9 +483,37 @@ test('原生系统临时目录可写，临时软链接不能写入其他项目�
   }
 })
 
+test('项目位于原生临时目录时仍保护邻居的已有文件、新文件和软链接目标', () => {
+  const base = mkdtempSync(join(系统临时目录(), 'blueprint-protected-'))
+  const temporary = mkdtempSync(join(系统临时目录(), 'blueprint-unprotected-'))
+  const own = join(base, 'own'), other = join(base, 'other')
+  mkdirSync(own); mkdirSync(other)
+  writeFileSync(join(other, 'existing'), 'unchanged')
+  symlinkSync(other, join(own, 'escape'))
+  const scope = { 根: own, 仓库: repo, 技能: join(repo, 'blueprint/packages/prompt/skill'), 保护根: [repo, base] }
+  const write = path => {
+    const spec = 隔离命令({ argv: ['/bin/sh', '-c', 'printf changed > "$1"', 'sh', path], cwd: own }, scope)
+    return spawnSync(spec.argv[0], spec.argv.slice(1), { cwd: own, env: { ...process.env, ...spec.env }, encoding: 'utf8' })
+  }
+  try {
+    assert.equal(write(join(own, 'own.txt')).status, 0)
+    assert.equal(readFileSync(join(own, 'own.txt'), 'utf8'), 'changed')
+    for (const path of [join(other, 'existing'), join(other, 'new'), join(own, 'escape/new')]) {
+      assert.notEqual(write(path).status, 0, path)
+    }
+    assert.equal(readFileSync(join(other, 'existing'), 'utf8'), 'unchanged')
+    assert.ok(!existsSync(join(other, 'new')))
+    assert.equal(write(join(temporary, 'native-cache')).status, 0, '未受保护的系统临时目录仍可写')
+    assert.equal(readFileSync(join(temporary, 'native-cache'), 'utf8'), 'changed')
+  } finally {
+    rmSync(base, { recursive: true, force: true })
+    rmSync(temporary, { recursive: true, force: true })
+  }
+})
+
 // 10-27 mini：Godot 的着色器缓存写不进，每次验收都从头编，一次两分多钟、10 核负载 50。缓存按类别整个放开。
 test('三处缓存整个可写；Blueprint 自己的缓存、各 App 的更新状态和缓存以外照旧不能写', () => {
-  const base = mkdtempSync(join(repo, '项目/.isolation-cache-'))
+  const base = mkdtempSync(join(projects, '.isolation-cache-'))
   const own = join(base, 'own'); mkdirSync(own)
   const C = 系统缓存目录(), 库 = realpathSync(join(homedir(), 'Library/Caches')), 点 = realpathSync(join(homedir(), '.cache'))
   const tag = `blueprint-test-${process.pid}-${Date.now()}`
@@ -504,7 +545,7 @@ test('三处缓存整个可写；Blueprint 自己的缓存、各 App 的更新�
 })
 
 test('普通文档自由读写；文件工具与命令保护相同的机器文件，不能通过改名或软链接绕过', async () => {
-  const root = mkdtempSync(join(repo, '项目/.文档权限核对-[边界]-'))
+  const root = mkdtempSync(join(projects, '.文档权限核对-[边界]-'))
   const evidenceGroup = '.blueprint-evidence/' + 'a'.repeat(24)
   for (const dir of ['系统文档', evidenceGroup, '.blueprint-evidence/media', '工作文档']) mkdirSync(join(root, dir), { recursive: true })
   const ledger = join(root, '系统文档/任务.db'), original = join(root, evidenceGroup, 'b'.repeat(24) + '.txt')

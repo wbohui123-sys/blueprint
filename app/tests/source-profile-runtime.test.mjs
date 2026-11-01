@@ -27,7 +27,10 @@ test('已准备的源码 CLI 真正 boot 和 mount canonical preset，拒绝借 
     cwd: root, timeout: 60000, maxBuffer: 1024 * 1024,
     env: { ...process.env, DSH_HOME: unused, BLUEPRINT_DATA_HOME: unused, BLUEPRINT_PROMPT_DIR: unused, NODE_OPTIONS: '' },
   })
-  const status = JSON.parse(result.stdout.trim().split('\n').at(-1))
+  const reports = result.stdout.split('\n').filter(line => line.startsWith('{"engine":')).map(line => JSON.parse(line))
+  assert.equal(reports.length, 1, '启动日志之外应有唯一的结构化核对结果')
+  const [status] = reports
+  assert.equal(status.passed, true)
   assert.equal(status.engine, manifest.dependencies['@deepseek-ai/dsh-llm'])
   assert.equal(status.sourceProfile, 'web')
   assert.equal(status.canonicalMounted, true)
@@ -39,7 +42,8 @@ test('已准备的源码 CLI 真正 boot 和 mount canonical preset，拒绝借 
   assert.equal(Object.keys(status.nativePluginVersions).length, 23)
   assert.equal(status.nativePluginVersions['@deepseek-ai/dsh-tool-goal'], status.engine)
   assert.ok(Object.values(status.nativePluginVersions).every(version => version === status.engine))
-  assert.deepEqual(status.externalTools, ['subagent_codex', 'subagent_claude_code'])
+  assert.deepEqual(status.externalTools, [])
+  assert.deepEqual(status.externalProviders, ['codex', 'claude-code'])
   assert.deepEqual(status.terminalTools, ['terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list'])
   assert.deepEqual(status.goalTools, ['get_goal', 'create_goal', 'update_goal'])
   assert.equal(status.goalServicesVerified, true)

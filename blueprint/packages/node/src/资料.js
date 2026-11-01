@@ -1,4 +1,4 @@
-/** 工具证据的生命周期：全文归档、定长网页片段、读过一次后的历史回收（本会话改过的文件、回收后又来读的那几行，读到的原文不回收）。 */
+/** 工具证据的生命周期：全文归档、定长网页片段、上下文压力下的批量历史回收（本会话改过的文件、回收后又来读的那几行，读到的原文不回收）。 */
 import { createHash } from 'node:crypto'
 import { mkdir, writeFile, readFile, access, realpath, appendFile } from 'node:fs/promises'
 import { join, relative, isAbsolute, resolve } from 'node:path'
@@ -282,12 +282,12 @@ function 回收过的范围(ctx, session, calls) {
 }
 
 /** 最新结果至少已被后续一次模型响应消费，才将它替换成可重读入口；本会话改过的文件、回收后又来读的那几行，原文不回收。 */
-export async function 回收已读结果(ctx, session) {
+async function 更新已读结果(ctx, session, 仅修复入口 = false) {
   const meter = ctx.get('tokenMeter')
   if (!meter || !session.surface || !session.eventAt) return 0
   const events = [...session.surface.nodes].map(seq => session.eventAt(seq)).filter(Boolean)
   const lastAssistant = events.filter(e => e.type === 'assistant/message').at(-1)?.seq
-  if (lastAssistant === undefined) return 0
+  if (lastAssistant === undefined && !仅修复入口) return 0
   const calls = new Map()
   for (const e of events) if (e.type === 'assistant/message') {
     for (const b of e.data.message.content) if (b.type === 'tool-call') calls.set(b.id, 展开工具调用(b.name, b.arguments))
@@ -320,6 +320,7 @@ export async function 回收已读结果(ctx, session) {
       count++
       continue
     }
+    if (仅修复入口) continue
     if (e.seq >= lastAssistant) continue
     if (text.length < 回收门槛) continue
     // 两种读文件的原文留在眼前，免得一遍遍重读：本会话改过的文件（改代码要一直对着它），
@@ -350,7 +351,48 @@ export async function 回收已读结果(ctx, session) {
   return count
 }
 
-export function 装资料(ctx) {
+export async function 回收已读结果(ctx, session) {
+  return 更新已读结果(ctx, session)
+}
+
+const 自动回收状态 = new WeakMap()
+
+async function 按压力回收(ctx, session, signal, 压力比例, 迟滞比例) {
+  // 为兼容旧会话，在压力判断前修正可核验的相对归档入口。
+  await 更新已读结果(ctx, session, true)
+  const header = typeof session.requestHeader === 'function' ? session.requestHeader() : null
+  const config = header?.config
+  const llm = ctx.llm
+  if (typeof config?.provider !== 'string' || typeof config?.model !== 'string' || typeof llm?.resolveModelInfo !== 'function') return 0
+  let info
+  try { info = await llm.resolveModelInfo(config.provider, config.model, signal) } catch { return 0 }
+  const contextWindow = info?.context?.contextWindow
+  const meter = ctx.get('tokenMeter')
+  if (!Number.isFinite(contextWindow) || contextWindow <= 0 || !meter?.measure) return 0
+  const totalTokens = meter.measure(session, header)?.totalTokens
+  if (!Number.isFinite(totalTokens)) return 0
+
+  let state = 自动回收状态.get(session)
+  if (!state || state.provider !== config.provider || state.model !== config.model || state.contextWindow !== contextWindow) {
+    state = { provider: config.provider, model: config.model, contextWindow, armed: true }
+    自动回收状态.set(session, state)
+  }
+  if (!state.armed) {
+    if (totalTokens > contextWindow * (压力比例 - 迟滞比例)) return 0
+    state.armed = true
+  }
+  if (totalTokens < contextWindow * 压力比例) return 0
+
+  const count = await 回收已读结果(ctx, session)
+  if (count) state.armed = meter.measure(session, header).totalTokens <= contextWindow * (压力比例 - 迟滞比例)
+  return count
+}
+
+export function 装资料(ctx, { 压力比例 = 0.75, 迟滞比例 = 0.1 } = {}) {
+  if (!Number.isFinite(压力比例) || 压力比例 <= 0 || 压力比例 >= 1
+    || !Number.isFinite(迟滞比例) || 迟滞比例 <= 0 || 迟滞比例 >= 压力比例) {
+    throw new RangeError('压力比例必须在 0 与 1 之间，迟滞比例必须大于 0 且小于压力比例')
+  }
   ctx.tools.register({
     name: 'web_fetch', description: 说明书('web_fetch'),
     parameters: {
@@ -375,9 +417,9 @@ export function 装资料(ctx) {
     }, timeoutMs: 30000, isConcurrencySafe: () => true,
     execute: (args, exec) => 抓网页(ctx, args, exec),
   })
-  ctx.on('agent/pre-step', async ({ agent }, next) => {
+  ctx.on('agent/pre-step', async ({ agent, signal }, next) => {
     const decision = await next()
-    if (decision?.kind === 'enter') await 回收已读结果(ctx, agent.session)
+    if (decision?.kind === 'enter' && !signal?.aborted) await 按压力回收(ctx, agent.session, signal, 压力比例, 迟滞比例)
     return decision
   }, { prepend: true })
 }

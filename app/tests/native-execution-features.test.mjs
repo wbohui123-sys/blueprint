@@ -3,11 +3,12 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
 import { pathToFileURL, fileURLToPath } from 'node:url'
-import { mkdtemp, mkdir, readFile, rm } from 'node:fs/promises'
-import { join } from 'node:path'
+import { mkdtemp, mkdir, readFile, rm, writeFile, realpath } from 'node:fs/promises'
+import { join, resolve, relative } from 'node:path'
 import { createServer } from 'node:http'
 import { execFileSync } from 'node:child_process'
-import { apply as features } from '../../blueprint/packages/node/src/执行能力.js'
+import { homedir } from 'node:os'
+import { apply as features, inject as featureServices } from '../../blueprint/packages/node/src/执行能力.js'
 import { 写执行能力, 读执行能力 } from '../../blueprint/packages/node/src/执行能力设置.js'
 import { fixtureProjectRoot as 项目路径 } from './project-fixture-root.mjs'
 import { 落新名册, 改名册, 记会话, 写工作文档, 新工作文档, 读名册 } from '../../blueprint/packages/roster/src/index.js'
@@ -15,6 +16,7 @@ import { 装 } from '../../blueprint/packages/context/src/index.js'
 import { 装程序工具 } from '../../blueprint/packages/context/src/程序工具.js'
 import { 装项目隔离, 原生提供方代码目录 } from '../../blueprint/packages/node/src/项目隔离.js'
 import { 检查行动预测 } from '../../blueprint/packages/node/src/预测.js'
+import { 数据根 } from '../../blueprint/packages/prompt/src/路径.js'
 
 const require = createRequire(new URL('../package.json', import.meta.url))
 const url = name => pathToFileURL(require.resolve('@deepseek-ai/' + name)).href
@@ -29,9 +31,10 @@ const entries = Object.fromEntries(Object.entries({ presentation: 'dsh-agent-too
 const call = (id, name, args) => ({ type: 'tool-call', id: sdk['dsh-llm'].ToolCallId(id), name, arguments: JSON.stringify(args) })
 const resources = fileURLToPath(new URL('../.build/native-resources', import.meta.url))
 
-async function fixture(t, options = {}) {
+async function fixture(t, options = {}, resourceRoot = resources, services = {}) {
   const root = await mkdtemp(join(项目路径, '官方执行能力核对-')), ctx = new sdk.cordis.Context(), requests = [], children = [], counts = new Map()
   t.after(async () => { await ctx.fiber.dispose(); await rm(root, { recursive: true, force: true }) })
+  for (const [name, service] of Object.entries(services)) ctx.provide(name, service)
   for (const name of ['dsh-llm', 'dsh-session', 'dsh-session-projection', 'dsh-system-prompt', 'dsh-tools', 'dsh-agent',
     'dsh-subprocess-local', 'dsh-working-directory', 'dsh-skill']) await ctx.plugin(sdk[name].default)
   await ctx.plugin(sdk['dsh-session-persistence-jsonl'].default, { root: join(root, '会话存储') })
@@ -45,7 +48,7 @@ async function fixture(t, options = {}) {
   await ctx.plugin(sdk['dsh-tool-fs']); await ctx.plugin(sdk['dsh-tool-skill'])
   // 只代替 preset 的 Loader 文件层；原生未发布 setup、子会话组合与工具作用域保持真实。
   ctx.provide('agentPresets', { composedPreset: () => 'blueprint', mount() {}, composeFrom() {} })
-  await ctx.plugin({ name: 'execution-features-fixture', inject: ['agents', 'subagents', 'sessions', 'agentPresets'], apply: features }, { resourceRoot: resources, entries })
+  await ctx.plugin({ name: 'execution-features-fixture', inject: featureServices, apply: features }, { resourceRoot, entries })
   装项目隔离(ctx, { 检查预测: 检查行动预测,
     只读代码目录: [...原生提供方代码目录([url('dsh-ptc-runtime-node')]), ...ctx.blueprintExecutionFeatures.readOnlyRoots] })
   let parent, response
@@ -63,8 +66,8 @@ async function fixture(t, options = {}) {
   }
   ctx.llm.registerAdapter(['features-fixture'], new Offline())
   ctx.on('agent/created', ({ agent }) => {
-    装({ systemPrompt: agent.ctx.get('systemPrompt'), on: agent.ctx.on.bind(agent.ctx), sessions: ctx.sessions, get: agent.ctx.get.bind(agent.ctx) })
     if (agent.session.header.origin === 'subagent') children.push(agent)
+    else 装({ systemPrompt: agent.ctx.get('systemPrompt'), on: agent.ctx.on.bind(agent.ctx), sessions: ctx.sessions, get: agent.ctx.get.bind(agent.ctx) })
   })
   const roster = await 落新名册(root, '官方能力核对', '交回可核对的文件与结果')
   await 写执行能力(root, options, 0)
@@ -144,30 +147,117 @@ print('verified: three Office formats')`
   assert.deepEqual(catalog.map(row => row.name).sort(), ['office-docx', 'office-pptx', 'office-xlsx'])
 })
 
-test('官方浏览器 MCP 本地点击与输入，项目独立状态及资源释放', async t => {
+test('只有打包无头浏览器、没有旧 manifest 的资源仍可用', async t => {
+  const resourceRoot = await mkdtemp(join(项目路径, '无头资源核对-'))
+  t.after(() => rm(resourceRoot, { recursive: true, force: true }))
+  const executable = join(resourceRoot, 'browser/chromium_headless_shell-1/mac/chrome-headless-shell')
+  await mkdir(join(executable, '..'), { recursive: true })
+  await writeFile(executable, 'readiness fixture')
+  const f = await fixture(t, { browser: false, workflow: false, office: false }, resourceRoot)
+  assert.equal((await f.ctx.blueprintExecutionFeatures.readiness()).browser, true)
+  assert.equal(f.ctx.blueprintExecutionFeatures.config.browserExecutable, executable)
+})
+
+test('官方浏览器 MCP 实际进程继承项目边界，点击输入可用且释放全部资源', async t => {
   const server = createServer((_req, res) => { res.setHeader('Content-Type', 'text/html'); res.end('<input aria-label="数字"><button onclick="document.querySelector(\'output\').textContent=document.querySelector(\'input\').value">核对</button><output></output>') })
   await new Promise(resolve => server.listen(0, '127.0.0.1', resolve))
   t.after(() => new Promise(resolve => server.close(resolve)))
-  const f = await fixture(t, { browser: true, workflow: false, office: false })
-  f.respond((request, step) => {
+  let managementCalls = 0
+  const management = createServer((req, res) => { if (req.url !== '/health') managementCalls++; res.end('management is listening') })
+  await new Promise(resolve => management.listen(0, '::', resolve))
+  t.after(() => new Promise(resolve => management.close(resolve)))
+  const port = management.address().port
+  for (const hostname of ['127.0.0.1', '[::1]']) {
+    const health = await fetch(`http://${hostname}:${port}/health`)
+    assert.equal(health.status, 200)
+    assert.equal(await health.text(), 'management is listening')
+  }
+  const f = await fixture(t, { browser: true, workflow: false, office: false }, resources, { webServer: { port } })
+  const snapshotOf = async request => {
+    const links = request.messages.flatMap(message => (message.content || []).flatMap(block =>
+      [...(block.text || '').matchAll(/\[Snapshot\]\(([^)]+)\)/g)].map(match => match[1])))
+    assert.ok(links.length, '浏览器应返回真实快照文件')
+    const path = await realpath(resolve(f.root, links.at(-1)))
+    assert.ok(relative(await realpath(f.root), path).startsWith('.blueprint-tmp/browser/'), '快照必须位于本项目的浏览器产物目录')
+    return readFile(path, 'utf8')
+  }
+  f.respond(async (request, step) => {
     if (step === 1) return call('browser-page', 'mcp__playwright-mcp__browser_navigate', { url: `http://127.0.0.1:${server.address().port}` })
     if (step === 2) {
-      const snapshot = JSON.stringify(request.messages)
+      const snapshot = await snapshotOf(request)
       const reference = snapshot.match(/textbox .*?\[ref=(e\d+)\]/)?.[1]
       assert.ok(reference, snapshot)
-      return call('browser-input', 'mcp__playwright-mcp__browser_type', { ref: reference, text: '42', element: '数字输入' })
+      return call('browser-input', 'mcp__playwright-mcp__browser_type', { target: reference, text: '42', element: '数字输入' })
     }
     if (step === 3) {
-      const reference = JSON.stringify(request.messages).match(/button .*?\[ref=(e\d+)\]/)?.[1]
+      const reference = (await snapshotOf(request)).match(/button .*?\[ref=(e\d+)\]/)?.[1]
       assert.ok(reference)
-      return call('browser-click', 'mcp__playwright-mcp__browser_click', { ref: reference, element: '核对按钮' })
+      return call('browser-click', 'mcp__playwright-mcp__browser_click', { target: reference, element: '核对按钮' })
     }
     if (step === 4) return call('browser-value', 'mcp__playwright-mcp__browser_evaluate', { function: '() => document.querySelector("output").textContent' })
+    if (step === 5) return call('browser-management-v4', 'mcp__playwright-mcp__browser_navigate', { url: `http://127.0.0.1:${port}` })
+    if (step === 6) return call('browser-management-v6', 'mcp__playwright-mcp__browser_navigate', { url: `http://[::1]:${port}` })
   })
   const result = await f.run()
-  assert.equal(result.length, 4, JSON.stringify(result))
-  assert.ok(result.every(row => !row.isError), JSON.stringify(result))
-  assert.match(JSON.stringify(result.at(-1)), /42/)
+  assert.equal(result.length, 6, JSON.stringify(result))
+  assert.ok(result.slice(0, 4).every(row => !row.isError), JSON.stringify(result))
+  assert.match(JSON.stringify(result[3]), /42/)
+  assert.ok(result.slice(4).every(row => row.isError), '浏览器不能访问宿主管理端口')
+  assert.equal(managementCalls, 0)
+
+  // 对真实 MCP、浏览器、渲染器与网络进程查询内核策略；不以页面的 file:// 限制替代 OS 隔离。
+  const processes = () => execFileSync('/bin/ps', ['-axo', 'pid=,ppid=,lstart=,command='], { encoding: 'utf8' })
+    .trim().split('\n').map(line => {
+      const row = line.trim().split(/\s+/)
+      return { pid: Number(row[0]), ppid: Number(row[1]), started: row.slice(2, 7).join(' '), command: row.slice(7).join(' ') }
+    })
+  const live = processes()
+  const mcp = live.filter(row => row.ppid === process.pid && row.command.includes(`--output-dir ${join(f.root, '.blueprint-tmp/browser', String(f.parent.id))}`))
+  assert.equal(mcp.length, 1, '须定位本项目唯一的真实 MCP 进程')
+  const pids = new Set([mcp[0].pid])
+  for (let previous = 0; previous !== pids.size;) {
+    previous = pids.size
+    for (const row of live) if (pids.has(row.ppid)) pids.add(row.pid)
+  }
+  const owned = live.filter(row => pids.has(row.pid))
+  assert.ok(owned.filter(row => row.command.includes('chrome-headless-shell')).length >= 2, '必须包含实际浏览器及子进程')
+  // 只提取本次子进程的 socket 路径，不输出其环境。
+  const environment = execFileSync('/bin/ps', ['eww', '-p', String(mcp[0].pid), '-o', 'command='], { encoding: 'utf8' })
+  const sockets = environment.match(/(?:^| )PWTEST_SOCKETS_DIR=(\/private\/tmp\/Blueprint-browser-[^ ]+)/)?.[1]
+  assert.ok(sockets)
+  await realpath(sockets)
+  const neighbor = await mkdtemp(join(项目路径, '浏览器邻居-'))
+  const host = await mkdtemp(join(数据根, '浏览器宿主-'))
+  t.after(async () => { await rm(neighbor, { recursive: true, force: true }); await rm(host, { recursive: true, force: true }) })
+  const own = join(f.root, '允许读写.txt'), other = join(neighbor, '禁止读写.txt'), ledger = join(host, '禁止读写.txt')
+  for (const path of [own, other, ledger]) await writeFile(path, 'synthetic boundary fixture')
+  const cases = [
+    ['file-read-data', own, 0], ['file-write-data', own, 0],
+    ['file-read-data', other, 1], ['file-write-data', other, 1],
+    ['file-read-data', ledger, 1], ['file-write-data', ledger, 1],
+    ['file-write-data', await realpath(join(f.root, '系统文档/任务.db')), 1],
+    ['file-read-data', await realpath(join(homedir(), 'Downloads')), 1],
+  ]
+  const python = join(resources, 'primary-runtime/dependencies/python/bin/python3')
+  const audit = `import ctypes,json,os,sys
+lib=ctypes.CDLL('/usr/lib/libsandbox.dylib',use_errno=True)
+check=lib.sandbox_check;check.restype=ctypes.c_int;check.argtypes=[ctypes.c_int,ctypes.c_char_p,ctypes.c_int]
+flag=1|ctypes.c_int.in_dll(lib,'SANDBOX_CHECK_NO_REPORT').value
+pids,cases=json.loads(sys.argv[1])
+assert check(os.getpid(),None,0)==0,'audit host must be unsandboxed'
+for pid in pids:
+ assert check(pid,None,0)>0,('sandbox missing',pid)
+ for op,path,expected in cases:
+  result=check(pid,op.encode(),flag,ctypes.c_char_p(os.fsencode(path)))
+  assert result>=0 and bool(result)==bool(expected),(pid,op,path,result,expected)
+print('verified actual process policies')`
+  assert.match(execFileSync(python, ['-c', audit, JSON.stringify([[...pids], cases])], { encoding: 'utf8' }), /verified/)
+  const afterAudit = processes()
+  assert.ok(owned.every(row => afterAudit.some(current => current.pid === row.pid && current.started === row.started && current.command === row.command)), '核验期间进程身份保持不变')
   await f.ctx.blueprintExecutionFeatures.releaseResources([f.parent])
   assert.equal(f.ctx.blueprintExecutionFeatures.activations.get(f.parent).options.browser, false)
+  const remains = () => { const now = processes(); return owned.some(row => now.some(current => current.pid === row.pid && current.started === row.started)) }
+  for (const deadline = Date.now() + 5000; remains() && Date.now() < deadline;) await new Promise(resolve => setTimeout(resolve, 100))
+  assert.equal(remains(), false, '释放能力后 MCP 及浏览器进程均须退出：' + JSON.stringify(processes().filter(row => pids.has(row.pid)).map(row => ({ pid: row.pid, ppid: row.ppid, program: row.command.split(' ')[0] }))))
+  await assert.rejects(realpath(sockets), { code: 'ENOENT' })
 })

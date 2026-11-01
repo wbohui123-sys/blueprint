@@ -43,7 +43,7 @@ test('隔离宿主真实创建到文稿和更改后位置，旧项目仍可执�
     for(const off of f.收.效果.reverse()) off();
     console.log(JSON.stringify({createdAtDefault:true,createdAtSelected:true,legacyStillExecutable:true,neighboursDenied:true}));
   `
-  const result = await run(process.execPath, ['--input-type=module', '-e', script], { cwd: repository, timeout: 60000,
+  const result = await run(process.execPath, ['--import', new URL('../../../app/scripts/native-node-protocol-check.mjs?register', import.meta.url).href, '--input-type=module', '-e', script], { cwd: repository, timeout: 60000,
     env: { ...process.env, BLUEPRINT_DATA_HOME: data, BLUEPRINT_DOCUMENTS_HOME: documents } })
   assert.deepEqual(JSON.parse(result.stdout.trim().split('\n').at(-1)), { createdAtDefault: true, createdAtSelected: true, legacyStillExecutable: true, neighboursDenied: true })
 })

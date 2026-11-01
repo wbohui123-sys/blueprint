@@ -66,7 +66,7 @@ const 插页消息 = text => createUserMessage({ content: [{ type: 'text', text 
 /**
  * 这次醒来接在叫醒话（或用户的话）后面的插页，两条消息：开头（职责与纸条）、组织情境、项目经验、节点总表在前，
  * 选择机选出的阶段 → 那一阶段的页在最后。开头先放进这一步，选择机看到的就是节点要看到的那一份（同 1）；
- * 两次请求前面逐字相同，缓存两头命中，阶段页也离模型下笔最近。选中回话也带开头（同 1 改了选 12）。
+ * 保留共享前缀供原生缓存复用，阶段页离模型下笔最近。选中回话也带开头。
  * `这一步` 是这一步新到、即将进对话的消息。
  * 插页只插新的（选 27）：没有新事、自己接着转进下一个阶段时（`有新事` 为假），只插阶段页和还没带过的并入通知；
  * 开头、组织情境上次插过还留在对话里，不重复。
@@ -131,7 +131,7 @@ export function 装思考开头(ctx) {
       回话开工.delete(payload.agent)
       const 节点 = await 认节点(ctx, payload.agent?.session)
       if (!节点) return d
-      const 插页 = await 阶段插页(ctx, 节点.根, 节点.行, d.messages || [], { session: payload.agent.session, signal: payload.signal })
+      const 插页 = await 阶段插页(ctx, 节点.根, 节点.行, d.messages || [], { session: payload.agent.session, agent: payload.agent, signal: payload.signal })
       if (进了orient(插页)) 先想这一步.add(payload.agent.session.id)
       return 插页?.length ? { ...d, messages: [...(d.messages || []), ...插页] } : d
     }
@@ -174,6 +174,7 @@ export function 装思考开头(ctx) {
     // 交回了的 helm 被用户叫去做事：一个座位始终一个 helm，原地重新开工（十 54），下面「交回了的节点被叫去干活」那段照常走。
     const 插页 = await 阶段插页(ctx, 节点.根, 节点.行, d.messages || [], {
       session: payload.agent.session,
+      agent: payload.agent,
       signal: payload.signal,
       重建: 新输入.some(是重建叫醒),
       有新事: 新输入.length > 0,

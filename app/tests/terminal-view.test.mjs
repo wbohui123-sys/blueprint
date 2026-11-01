@@ -191,7 +191,8 @@ test('Stop All 等取消完成后才收回节点执行终端；等待释放期�
   await waitFor(() => calls.length === 3)
   assert.deepEqual(calls.map(row => row[0]), ['session.list', 'session.cancel', 'external.interrupt'])
   at.项目 = 'project-b'; cancel.resolve()
-  await waitFor(() => calls.length === 4)
+  await waitFor(() => calls.length === 5)
+  assert.deepEqual(calls.slice(3), [['project.stopExternalRuns', 'project-a'], ['project.closeAgentTerminals', 'project-a']])
   assert.deepEqual(calls.at(-1), ['project.closeAgentTerminals', 'project-a'])
   assert.equal(realm.全停字, '…PTY'); assert.deepEqual(messages, [])
   close.resolve(); await stopping
@@ -208,7 +209,7 @@ test('旧服务未声明节点终端关闭能力时，Stop All 不发送新 RPC�
         items: [{ sessionId: 'node-a', running: false }] } } : { ok: true }
     } })
   vm.runInContext(['会话表', '停一个', '全停'].map(htmlFunction).join('\n'), realm)
-  await realm.全停(); assert.deepEqual(calls, ['session.list', 'session.cancel'])
+  await realm.全停(); assert.deepEqual(calls, ['session.list', 'session.cancel', 'project.stopExternalRuns'])
   calls.length = 0; await realm.停一个('node-a', { 在跑: true }, 'project-a')
   assert.deepEqual(calls, ['session.cancel']); assert.match(messages[0], /Stop All/)
 })

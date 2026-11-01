@@ -96,16 +96,24 @@ test('创建时锁定思考等级，目录更新也保持锁定；失败后恢�
 })
 
 
-test('首次打开新项目默认为 max 和协作，已有用户的强度与协作选择继续保留', async () => {
+test('新项目默认 max 与 spark；保留当前选择并按目录迁移旧协作模式', async () => {
   const html = await readFile(new URL('../../viewer/studio.html', import.meta.url), 'utf8')
   const coordinate = html.slice(html.indexOf('const 坐标表 = ['), html.indexOf('(async function wireNewProject(){'))
   const modes = JSON.parse(await readFile(new URL('../../blueprint/packages/prompt/shells/协作模式/名单.json', import.meta.url), 'utf8'))
-  for (const remembered of [false, true]) {
-    const saved = new Map(remembered ? [['studio-quality-4', 'ultra'], ['studio-mode-4', 'solo']] : [])
-    const context = vm.createContext({ 译: text => text, mem: { get: key => saved.get(key), set: (key, value) => saved.set(key, value) } })
+  const migrationStart = html.indexOf("  const 模式条 = 坐标表.find(x => x.名 === 'Mode');")
+  const migrationEnd = html.indexOf('  /* 坐标那几根条:', migrationStart)
+  assert.ok(migrationStart >= 0 && migrationEnd > migrationStart)
+  for (const [entries, expected] of [
+    [[], ['max', 'spark']],
+    [[['studio-quality-4', 'ultra'], ['studio-mode-5', 'build']], ['ultra', 'build']],
+    [[['studio-mode-4', 'solo']], ['max', 'solo']],
+    [[['studio-mode-4', 'co-create']], ['max', 'build']],
+    [[['studio-mode-3', 'execute']], ['max', 'build']],
+  ]) {
+    const saved = new Map(entries)
+    const context = vm.createContext({ 译: text => text, 目录: { modes }, mem: { get: key => saved.get(key), set: (key, value) => saved.set(key, value) } })
     vm.runInContext(coordinate + ';globalThis.rows=坐标表;globalThis.mount=造条;', context)
-    const mode = context.rows.find(row => row.名 === 'Mode')
-    mode.挡 = modes.map(row => ({ 名: row.id, 显示名: row.label, 说: row.description }))
+    vm.runInContext(html.slice(migrationStart, migrationEnd), context)
     const chosen = []
     for (const row of context.rows) {
       let inputs = []
@@ -117,6 +125,7 @@ test('首次打开新项目默认为 max 和协作，已有用户的强度与协
       }
       chosen.push(context.mount(host, row)().名)
     }
-    assert.deepEqual(chosen, remembered ? ['ultra', 'solo'] : ['max', 'co-create'])
+    assert.deepEqual(chosen, expected)
+    if (entries.length) assert.equal(saved.get('studio-mode-5'), expected[1], '旧选择迁移后保存当前模式键')
   }
 })

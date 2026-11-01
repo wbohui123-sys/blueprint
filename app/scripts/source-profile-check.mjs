@@ -133,8 +133,12 @@ export async function checkSourceProfile() {
     }
     const terminalTools = ['terminal_open', 'terminal_send', 'terminal_read', 'terminal_signal', 'terminal_close', 'terminal_list']
     const goalTools = ['get_goal', 'create_goal', 'update_goal']
-    const tools = ['subagent_codex', 'subagent_claude_code', 'working_directory', 'create_worktree', ...terminalTools, ...goalTools, 'ralph']
+    const tools = ['working_directory', 'create_worktree', ...terminalTools, ...goalTools, 'ralph']
     for (const name of tools) assert.ok(ctx.tools.get(name, agent), `真正挂载的 canonical preset 应有工具 ${name}`)
+    for (const name of ['subagent_codex', 'subagent_claude_code']) assert.ok(!ctx.tools.get(name, agent),
+      '外部 run 由宿主启动，不再给节点暴露外部委派工具')
+    const externalProviders = ['codex', 'claude-code']
+    for (const name of externalProviders) assert.ok(ctx.subagents.getProvider(name), `宿主仍须注册外部提供方 ${name}`)
     assert.equal(typeof ctx.get('goals')?.resume, 'function')
     for (const id of ['goal', 'goal-round-driver', 'command-goal']) assert.equal(
       [...ctx.loader.entries()].filter(row => row.options.id === id).length, 1, `源码 Goal 接官方 ${id} 单一实例`)
@@ -173,7 +177,7 @@ export async function checkSourceProfile() {
     assert.ok(!(await ctx.agentPresets.list()).some(row => row.id === 'blueprint'), '卸载声明须通过原生 disposer 撤回注册')
     return { engine: options.version, sourceProfile: 'web', passed: true, userDataUsed: false,
       canonicalMounted: true, canonicalBaseVerified: true, nativePluginVersions, providerEntriesVerified: true, declarationDisposed: true,
-      externalTools: tools.slice(0, 2), terminalTools, goalTools, goalServicesVerified: true, ralphVerified: true,
+      externalTools: [], externalProviders, terminalTools, goalTools, goalServicesVerified: true, ralphVerified: true,
       terminalControllerVerified: true, terminalClientReady: terminalAssets.ready, officeSkills, modelRequested: false }
   } finally {
     try { await ctx?.fiber.dispose() }
@@ -188,5 +192,6 @@ export async function checkSourceProfile() {
 }
 
 if (process.argv[1] && await realpath(process.argv[1]).catch(() => undefined) === fileURLToPath(import.meta.url)) {
-  checkSourceProfile().then(result => console.log(JSON.stringify(result))).catch(error => { console.error(error); process.exitCode = 1 })
+  try { console.log(JSON.stringify(await checkSourceProfile())) }
+  catch (error) { console.error(error); process.exitCode = 1 }
 }

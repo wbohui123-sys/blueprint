@@ -294,7 +294,7 @@ async function claudeHandshake(f, sdkRoot, home, { model, settings, checkAutoDen
   try {
     query = sdk.query({ prompt: prompt(), options: { cwd: f.cwd, abortController: controller, persistSession: false, permissionMode: 'acceptEdits',
       ...(model ? { model } : {}), ...(settings ? { settings } : {}),
-      env: { CLAUDE_CONFIG_DIR: home, ANTHROPIC_API_KEY: 'blueprint-fake-key', ANTHROPIC_BASE_URL: 'https://127.0.0.1:1',
+      env: { CLAUDE_CONFIG_DIR: home, CLAUDE_CODE_TMPDIR: join(f.root, '.blueprint-tmp'), ANTHROPIC_API_KEY: 'blueprint-fake-key', ANTHROPIC_BASE_URL: 'https://127.0.0.1:1',
         DISABLE_TELEMETRY: '1', DISABLE_ERROR_REPORTING: '1', CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC: '1' },
       spawnClaudeCodeProcess: options => {
         child = f.spawn([options.command, ...options.args], options.env)
@@ -356,7 +356,10 @@ test('固定CLI/SDK从源码与独立载荷在原生工具沙箱完成无模型�
     assert.equal(await readFile(join(home, 'config.toml'), 'utf8'), config)
   }
   const boundary = await f.run(async () => {
-    await assert.rejects(f.ctx.fs.resolve(join(f.assets.codex.packageRoots[0], 'package.json')), /PROJECT_ISOLATION/)
+    const providerCode = await f.ctx.fs.resolve(join(f.assets.codex.packageRoots[0], 'package.json'))
+    assert.equal(f.ctx.fs.processPath(providerCode), join(f.assets.codex.packageRoots[0], 'package.json'), '部署声明的提供方代码只读可访问')
+    assert.throws(() => f.ctx.fs.writeText(providerCode, 'ATTEMPT'), /PROJECT_ISOLATION/)
+    await assert.rejects(f.ctx.fs.resolve(join(f.neighbor, '邻居原文.txt')), /PROJECT_ISOLATION/)
     const paths = { current: join(f.cwd, '当前原文.txt'), other: join(f.neighbor, '邻居原文.txt'), code: join(f.assets.codex.packageRoots[0], 'package.json'),
       sdk: join(f.assets.claudeCode.packageRoots[0], 'package.json'), machine: join(f.root, '系统文档/任务.db') }
     const source = `const fs=require('node:fs'),p=JSON.parse(process.argv[1]),out={};for(const key of ['current','other','code','sdk']){try{fs.readFileSync(p[key]);out[key]='read'}catch(e){out[key]=e.code}}for(const key of ['code','machine']){try{fs.writeFileSync(p[key],'ATTEMPT');out[key+'Write']='write'}catch(e){out[key+'Write']=e.code}}console.log(JSON.stringify(out))`

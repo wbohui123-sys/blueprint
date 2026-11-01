@@ -20,7 +20,7 @@
 
 节点对话可点击左下角「＋」添加文件或图片，也可拖入文件、粘贴图片；图片和文字一起粘贴时都保留。文字与附件草稿按节点保存，切换回来可继续发送。节点可只读访问自己或同项目上级已收到的附件原件，需要修改时先复制到项目目录。
 
-新项目按人机协作频率选择模式：高度协作，各层多数有实际取舍的决策一起做；轻度协作，总节点方案由用户确认、子节点方案自动通过，各节点的问题由用户回答；solo，与轻度协作用同一套系统，仅自动选择默认第一项、自动同意各节点方案。各层及同层接续轮继承选择；需求是否清楚、任务难度与品质目标分别判断。旧 co-create 按高度协作理解，execute 按轻度协作理解。
+新项目默认 max 品质与 spark 模式。spark 用于一起构思尚不明确的目标，build 用于已有大致目标、执行方案需要共同判断的工作，solo 由节点自主推进。当前选择继续保留；旧 co-create 与 execute 按目录迁移为 build，旧 solo 保留。模式说明与引导由 prompt 包的协作模式目录提供。
 
 模型失败直接显示“响应超时”或“接口限流”，等待与开始自动重试各有可见记录。所有模型连接的默认重试冷却约 10、20、40 秒，之后最多 60 秒再试，最多重试五次；新连接与升级后尚未设定策略的旧连接采用此值，已有自定义策略保留。
 
@@ -50,7 +50,9 @@ skill 面板区分已启用和当前条件：缺少程序、媒体 API 配置、
 
 办公与文档预设包含官方 Word、Excel、PowerPoint 技能，使用随包 Python 与 LibreOffice Kit；源码版从 bundle 的实际目录定位资源。办公预设同时负责资料取得、多格式读取、数据处理与图表说明。游戏预设同时提供 Godot 2D／3D 工程和随工程分发的 Phaser 网页 2D 游戏；3D 预设提供 Godot 实时场景与 Three.js 网页模型展示，技能摘要按交付环境区分用途。小说预设分别处理章节材料与叙事状态、作者文风与改稿对照。视频预设提供本地 HTML 时间轴动画，完整 MP4 导出和音轨混合尚未接入。文档预设负责办公材料读取、数据与图表、可编辑 PPTX 和报告排版，沿用原 `more` 类型 id。设计资料统一保留 OpenDesign，界面评审与打磨使用 Impeccable，并提供素材复用。共享工具供多个情境复用同一入口；旧项目选择中的 `ui-ux-pro-max`、`explainroo` 分别按 `open-design`、`html-video` 读取，重复入口撤下，原来的辅助资源保留。
 
-ImageMagick、FFmpeg、uv、Poppler 等仍需对应外部程序。交互式浏览器和控制其他桌面 App 尚未接入，现版不推荐启动外部 Chrome、Playwright 或 Peekaboo，也不引导用户授予整机操控权限。内置预览、媒体播放与网页截图不需要屏幕录制或辅助功能权限。可用性检查保留用户 skill 开关，不修改项目、API Key 或项目隔离。
+ImageMagick、FFmpeg、uv、Poppler 等仍需对应外部程序。项目启用浏览器能力后，通过官方 Playwright MCP 使用随包无头浏览器进行页面导航、输入、点击与读取；控制其他桌面 App 尚未接入，不引导用户授予整机操控权限。内置预览、媒体播放与网页截图不需要屏幕录制或辅助功能权限。可用性检查保留用户 skill 开关，不修改项目或 API Key。
+
+浏览器 MCP 与其子进程统一继承 Blueprint 项目 Seatbelt，限制邻居项目、宿主账本、个人文件夹及宿主管理端口；项目内机器维护文件仍禁止写入。浏览器状态和快照保存在项目 `.blueprint-tmp/browser/`，短 Unix socket 目录随能力释放。macOS 不允许受限进程再应用 Chromium 的另一份沙箱策略，因此此入口显式关闭 Chromium 内层沙箱；这是项目级隔离，不具备 Chromium 原有的进程间沙箱隔离能力。
 
 所有模型共用同一个 `web_search` 工具，通过 DuckDuckGo 公共搜索页面取得网页标题、链接和摘要，无需搜索 Key 或模型厂商的联网开关。换模型、添加 API 连接均不影响搜索；当前模型负责提出查询、阅读结果，并按需用 `web_fetch` 读取原文。只返回真实搜索来源，结果随原生工具记录保存。公共搜索服务的验证、限流或网络失败会明确报错，不把错误页面当成无结果。
 
@@ -107,17 +109,21 @@ npm --prefix app run smoke:notifications
 npm --prefix app run smoke:render
 ```
 
-测试覆盖本地接口边界、默认内容升级，以及真实宿主的启动和离线模型协作。GitHub Actions 构建 DMG 和 ZIP，并保存为 workflow artifacts。下载上传到 Releases 由仓库所有者管理。
+测试覆盖本地接口边界、默认内容升级，以及真实宿主的启动和离线模型协作。本仓库在 Mac 本地检查和构建，不依赖服务端 CI；DMG、ZIP 与 Releases 上传由仓库所有者管理。
 
 `smoke:desktop` 使用隐藏窗口、模拟模型和临时项目，验证真实桌面 IPC、文件链接、画廊缩略图、HTML、PDF、音视频播放与进度拖动；不使用已有项目或 API Key。
 
 `BLUEPRINT_SMOKE_MATERIAL_UI=1 npm --prefix app run smoke` 另外核对材料目录分页、临时图片预览与 context 对应记录的来源；同时检查读取不调用模型、不改变节点工作状态，并验证重启恢复。
 
-`smoke:render` 验证内置浏览器的真实 PNG、相对资源、持续连接、外部资源代理及取消清理；CI 在干净安装环境中运行这两项桌面核对，浏览器随构建提供。
+`smoke:render` 验证内置浏览器的真实 PNG、相对资源、持续连接、外部资源代理及取消清理；这些桌面核对在本机单独运行，浏览器随构建提供。
 
 已有项目运行时，可用 `node app/scripts/prepare-scenario-smoke.mjs` 在新目录准备固定引擎的隔离副本，再以 `BLUEPRINT_SMOKE_RUNTIME=<输出目录>` 运行 `node app/scripts/project-skills-smoke.mjs`。它使用临时数据与模拟模型核对七类项目的技能选择，不改变正在使用的运行包；不要在此时执行会重建原运行包的 `smoke:skills`。
 
 固定新版源码回归可用 `app/node_modules/node/bin/node --import './app/scripts/native-node-protocol-check.mjs?register' --test blueprint/packages/<包>/*.test.js`，它使用 App 依赖而不改现用 profile。`node app/scripts/source-profile-check.mjs` 只在临时目录检查源码装配。
+
+`node app/scripts/orchestration-check.mjs` 使用 App 锁定依赖与独立临时数据目录，核对纸条、事件等待、验证收据、任务分工、上下文回收和选择器缓存；macOS 还运行依赖 Seatbelt 的纸条、信息依赖与选择器回归。加 `--full` 运行 `app/tests/*.test.mjs` 与 `blueprint/packages/*/*.test.js` 的全部测试，每个文件只运行一次。需要按锁文件安装开发依赖；涉及浏览器、Office 和固定 CLI 的测试还需要各自的本地运行资源。
+
+`bash scripts/preflight.sh` 是本地完整源码检查入口；`--staged` 只核对暂存差异格式，供提交钩子使用。推送钩子调用不带参数的完整入口，失败即阻止推送。Git 操作使用 Mac 本地克隆，只推送 GitHub；不使用 Gitea 工作流或 NAS 仓库执行检查。源码回归不替代桌面 smoke、安装包或真实长任务验收。
 
 系统全局 `dsh` 与 Blueprint 引擎独立升级。源码入口 `./dsh` 按本文件夹 `package.json` 的引擎版本选择 CLI，并使 profile 依赖指向同一引擎；全局版本不匹配时使用按版本隔离的 `app/.build/source-cli-<版本>/`；解析本身只读，`./dsh` 在实际启动时显式对齐 profile 依赖。缓存缺失时运行 `npm --prefix app run prepare:cli` 安装固定版本。桌面版仍由生产依赖和锁文件决定引擎版本。
 
@@ -132,9 +138,9 @@ npm --prefix app run smoke:render
 | 会话与等待 | v3→v4 只读冷迁移保留旧等待记录及迁移后的名称；新等待只使用原生 Inbox 和 blocked 轮尾，不再写扩展事件，session-events 补丁已撤下。输入身份、claim 间隙、停止与阶段报告走官方纯投影；新版 Jobs 使用 SessionId 和 settled 订阅。 |
 | 多模态 | 图片保留原生附件和预算卸载；精简版补丁仅补音视频与并行图片的工具归属，按精确版本选取。音视频直接输入目前仅支持 OpenAI Completions，其他协议明确拒绝。 |
 | 当前目录与工作树 | 官方 workingDirectory 与 worktrees 服务，共用源码／App 工具接线。文件、搜索、命令及专用文件工具采用当前目录；项目身份、技能选择、归档和正式 Git 成果仍按原项目定位。 |
-| Claude Code 与 Codex | 官方 external activation 与两种独立启动工具，继承当前目录或指定工作树。原生 manager 管理取消、清理和完成通知；启动回执保留提供方、编号和实际目录。它们目前是一次性执行，不能恢复同一外部会话或收续聊；正式节点的责任、纸条与成果管理继续由 Blueprint 承担。 |
+| Claude Code 与 Codex | 外部 run 由 Blueprint 宿主用随包 CLI 启动，节点工具目录不暴露 `subagent_codex` 或 `subagent_claude_code`。宿主保留官方提供方注册，用于固定程序版本和只读代码目录；正式节点的责任、纸条与成果管理继续由 Blueprint 承担。 |
 | 持续终端 | 官方 `terminals/terminal-bash/tool-terminal` 提供六个 Agent 工具，保留 shell／REPL，后台发送复用 Jobs。用户 Terminal 页沿独立 `terminalController` 和官方 React-free `ClientTerminals`，支持输入、尺寸、多个标签与同宿主重连屏幕恢复。 |
-| 程序工具 | 官方 PTC 的 `run_code`、SDK 与已有 Node runtime 已完成 Blueprint 提示、内部调用、阶段报告和成果／材料协同；内部结果只作持久展示，模型只收程序最终输出与原生追加背景。默认仍采用原生工具与按需目录，产品模式入口和通用 Workflow 尚未开放。 |
+| 程序工具 | 项目可启用官方 PTC 的 `run_code`，默认仍采用原生工具与按需目录；内部结果持久展示，模型收程序最终输出与原生追加背景。通用 Workflow 默认启用，正式节点可并行求助；帮手获得本块职责情境，正式节点保留整合与验收责任。 |
 | 依赖与构建 | DSH 与 Cordis 配套版本、锁文件和构建检查已同步。`prepare --output <新目录>` 可生成完整隔离包，独立 CLI 缓存保留旧版。 |
 
 随包的 Codex CLI 由 App 在 `package.json` 的 `overrides` 里定为 0.163.0（2026-10-18；提供方钉的 0.153.4 拿不到新模型），`external-provider-assets.mjs` 核对的是 App 定的这一版。Codex 使用官方 `dangerously-bypass-approvals-and-sandbox` 关闭重复内层，执行仍完整经过 Blueprint 项目沙箱。真实 macOS 检查确认双层 `workspaceWrite` 返回 71，统一外层后命令和工作树写入正常。原生登录位置保留；只有官方进程可写 `CODEX_HOME/tmp` 和 `installation_id`，数据库放项目 `.blueprint-tmp/codex-state`，登录与配置文件保持只读。
@@ -147,7 +153,7 @@ Claude Code 默认采用官方 `acceptEdits`，可编辑文件和使用原生准
 
 隔离完整宿主已验证新项目工具链、临时项目重启恢复、等待后唤醒、子会话取消和上下文重建。`node app/scripts/harness-compatibility-check.mjs <新版依赖目录> [结果.json]` 可用合成会话复查格式、扩展事件和补丁，不使用用户数据或真实模型。通过冷读不等于旧项目已经可继续执行；写模式会发布新代际，切换前应备份并在副本上验证。
 
-对本项目优先评估：新版工具调度故障恢复与过期图片重传，可改善长任务的可靠性；Office skills 与共享 Python／Node 依赖可减少办公情境对外部安装的依赖，但需要另行准备和打包资源；实验性 Browser Use 能补交互网页验证，需按项目隔离后接入。`0.2.1-alpha.2` 另提供 Session 状态记录、动态系统提示／工具变化及流式请求超时修复，值得在项目适配后评估；全局升级没有自动给 Blueprint 接入这些功能。官方更新见 [0.2.0-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.1)、[0.2.0-rc.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2) 和 [0.2.1-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.2)。
+Office skills、共享 Python／Node 依赖及实验性 Browser Use 已接入项目能力，使用前须准备并打包对应资源；全局 DSH 升级不会自动更新 Blueprint 的资源。新版工具调度故障恢复、过期图片重传、Session 状态记录、动态系统提示／工具变化及流式请求超时修复仍按固定引擎的实际接缝核验。官方更新见 [0.2.0-rc.1](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.1)、[0.2.0-rc.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.0-rc.2) 和 [0.2.1-alpha.2](https://github.com/deepseek-ai/deepseek-harness/releases/tag/dsh-v0.2.1-alpha.2)。
 
 导出精简的发布源码：
 

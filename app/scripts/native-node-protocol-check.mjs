@@ -12,7 +12,7 @@ const sourceRoots = [join(repository, 'blueprint'), join(appRoot, 'tests')].map(
 if (new URL(import.meta.url).searchParams.has('register')) {
   registerHooks({ resolve(specifier, context, nextResolve) {
     if (sourceRoots.some(root => context.parentURL?.startsWith(root))
-      && (specifier.startsWith('@deepseek-ai/') || specifier === 'zod')) {
+      && (specifier.startsWith('@deepseek-ai/') || specifier === 'zod' || specifier === 'yaml' || specifier === 'js-yaml')) {
       return { url: pathToFileURL(require.resolve(specifier)).href, shortCircuit: true }
     }
     return nextResolve(specifier, context)

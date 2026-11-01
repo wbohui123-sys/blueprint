@@ -11,6 +11,8 @@ import SystemPrompt from '@deepseek-ai/dsh-system-prompt'
 import ToolRuntime from '@deepseek-ai/dsh-tools'
 import AgentRegistry from '@deepseek-ai/dsh-agent'
 import AgentLoop from '@deepseek-ai/dsh-agent-loop'
+import GoalService from '@deepseek-ai/dsh-goal'
+import * as GoalRoundDriver from '@deepseek-ai/dsh-goal-round-driver'
 import JobsLocal from '@deepseek-ai/dsh-jobs-local'
 import LocalFileSystem from '@deepseek-ai/dsh-fs-local'
 import Subprocess from '@deepseek-ai/dsh-subprocess-local'
@@ -32,6 +34,7 @@ import { 离线已定稿行 } from './测试会话.js'
 import { 检查行动预测 } from './src/预测.js'
 import { 工具结果Of } from '../context/src/消息协议.js'
 import { 递自动输入, 停止后台 } from './src/会话.js'
+import { 装持续工作, 开持续目标, 当前持续目标 } from './src/持续工作.js'
 import { 写问答 } from '../roster/src/问答.js'
 
 const 输入 = (text, source = { kind: 'user' }) => createUserMessage({ content: [{ type: 'text', text }], source })
@@ -62,7 +65,7 @@ class 等待核对模型 extends LlmAdapter {
   }
 }
 
-async function 搭原生等待(t, { jobs = false, autoResume = false, predictionGuard = false, scopedWait = false } = {}) {
+async function 搭原生等待(t, { jobs = false, goals = false, autoResume = false, predictionGuard = false, scopedWait = false } = {}) {
   const 根 = await mkdtemp(join(predictionGuard ? 项目路径 : tmpdir(), 'Blueprint 原生纸条等待回归-'))
   const ctx = new Context()
   t.after(async () => {
@@ -73,6 +76,7 @@ async function 搭原生等待(t, { jobs = false, autoResume = false, prediction
   })
   for (const plugin of [LlmRuntime, SessionStore, SessionProjectionRegistry, SystemPrompt, ToolRuntime, AgentRegistry]) await ctx.plugin(plugin)
   await ctx.plugin(AgentLoop, { agents: [] })
+  if (goals) { await ctx.plugin(GoalService); await ctx.plugin(GoalRoundDriver) }
   if (jobs) { await ctx.plugin(JobsLocal); await ctx.plugin(ToolJobs) }
   if (autoResume) { await ctx.plugin(LocalFileSystem, { cwd: 根 }); 装节点文档(ctx); 装工具(ctx); 装收尾续工(ctx) }
   if (predictionGuard) await ctx.plugin(Subprocess)
@@ -82,6 +86,7 @@ async function 搭原生等待(t, { jobs = false, autoResume = false, prediction
   let waitOwner = null
   if (!scopedWait) 装纸条等待(ctx)
   装纸条(ctx); 装通用工具(ctx); 装条件等待(ctx)
+  if (goals) 装持续工作(ctx)
   if (predictionGuard) 装项目隔离(ctx, { 检查预测: 检查行动预测 })
   await 落新名册(根, '原生纸条等待回归', '取得其他节点的实际证据后再继续。')
   await 改名册(根, async 名册 => {
@@ -907,6 +912,96 @@ test('真实 loop 等下一条用户输入，旧消息与插件通知不释放�
   await 等到续工结束(f, 2)
   assert.equal(f.rootRequests().length, 2)
   assert.ok(文字(f.rootRequests()[1].messages).includes('用户现在给出的新方向'))
+  assert.deepEqual(f.failures, [])
+})
+
+/** 真实 wait 工具挂起 Goal，保留 input 等待；后续由原生 inbox 和调度处理纸条。 */
+async function 搭Goal输入等待(t, id = '1') {
+  const f = await 搭原生等待(t, { goals: true }), agent = f.agents.get(id)
+  const steps = [{ calls: [工具调用('wait-input', 'wait', { reason: '等用户提供执行条件', conditions: [{ type: 'input' }] })] }]
+  f.model.stepsBySession.set(agent.session.id, steps)
+  const row = 行Of(await 读名册(f.根), id)
+  agent.steer(输入('先核对执行条件，缺少时登记等待。'))
+  开持续目标(f.ctx, agent, row)
+  await 等到(f, () => 当前持续目标(f.ctx, agent)?.phase === 'blocked')
+  const requests = () => f.model.requests.filter(r => r.sessionId === agent.session.id)
+  assert.equal(requests().length, 1)
+  assert.equal(当前持续目标(f.ctx, agent).blockedReason.code, 'blueprint-wait')
+  const wait = 行Of(await 读名册(f.根), id).wait
+  assert.deepEqual(wait.conditions, [{ type: 'input' }])
+  return { ...f, target: agent, steps, requests, wait }
+}
+
+for (const kind of ['tell', 'ask']) test(`Goal 等 input 时上级 ${kind} 唤醒一轮，原等待不解除，重复投递不重复处理`, { timeout: 15000 }, async t => {
+  const f = await 搭Goal输入等待(t), agent = f.target, text = `上级 ${kind}：执行条件有了新的信息。`
+  f.steps.push({ text: '已处理上级的新信息，原条件仍待确认。' })
+  const note = await 传纸条(f.ctx, f.根, '0', '1', text, { kind })
+  await 等到(f, () => f.requests().length === 2)
+  assert.ok(文字(f.requests()[1].messages).includes(text), '新纸条实际到达模型')
+  const received = agent.session.ownEvents().filter(e => e.type === 'user/message' && e.data.source?.summary === `blueprint-note:${note.id}:note`)
+  assert.equal(received.length, 1)
+  assert.equal(agent.inbox.nextStep.some(m => m.id === received[0].data.id), false)
+  assert.deepEqual(行Of(await 读名册(f.根), '1').wait, f.wait, '处理新事不冒充等待条件已满足')
+  assert.equal(当前持续目标(f.ctx, agent).phase, 'blocked', '不恢复 Goal 自动续跑')
+  await 送未送纸条(f.ctx, f.根, '1'); await 复查项目等待(f.ctx, f.根)
+  await new Promise(resolve => setTimeout(resolve, 50)); await f.settle()
+  assert.equal(f.requests().length, 2)
+  assert.deepEqual(f.failures, [])
+})
+
+for (const barrier of ['正式前置', '开工前等下层', '节点已去掉', '无关通知', '回条']) {
+  test(`Goal 等 input 的补启与 pre-step 都保留${barrier}限制`, { timeout: 15000 }, async t => {
+    const id = barrier === '开工前等下层' ? '0' : '1'
+    const f = await 搭Goal输入等待(t, id), agent = f.target
+    if (['正式前置', '开工前等下层', '节点已去掉'].includes(barrier)) {
+      await 改名册(f.根, m => ({ ...m, rows: m.rows.map(r => r.id !== id ? r : {
+        ...r, ...(barrier === '正式前置' ? { after: ['2'] }
+          : barrier === '开工前等下层' ? { start: 'children_done', kickoff: { id: '等待孩子后开工', delivered: false } }
+            : { status: '去掉' }),
+      }) }))
+    }
+    const source = barrier === '无关通知' ? { kind: 'plugin:fixture' }
+      : { kind: 'plugin:blueprint-node', summary: `blueprint-note:gate:${barrier === '回条' ? 'reply' : 'note'}` }
+    const queued = 输入(`${barrier}尚未解除时到达的自动输入。`, source)
+    const before = agent.session.ownEvents().filter(e => e.type === 'turn/start').length
+    // 直接走自动输入入口，确保核对的是补启门禁，而非纸条投递层提前过滤。
+    递自动输入(f.ctx, agent, queued)
+    await new Promise(resolve => setTimeout(resolve, 100)); await f.settle()
+    assert.equal(agent.session.ownEvents().filter(e => e.type === 'turn/start').length, before, '补启不能抢开一轮')
+    assert.ok(agent.inbox.nextStep.some(m => m.id === queued.id), '未获准的输入保留在 inbox')
+    const direct = 输入(`${barrier}尚未解除时直接叫醒。`, source)
+    agent.steer(direct)
+    await agent.whenIdle()
+    await new Promise(resolve => setTimeout(resolve, 50)); await f.settle()
+    assert.equal(f.requests().length, 1, 'pre-step 也不允许进入模型')
+    for (const input of [queued, direct]) assert.ok(agent.inbox.nextStep.some(m => m.id === input.id))
+    assert.deepEqual(f.failures, [])
+  })
+}
+
+test('Goal 等 input 处理纸条期间用户按停，排队纸条不补启，后续上级消息也不唤醒', { timeout: 15000 }, async t => {
+  const f = await 搭Goal输入等待(t), agent = f.target
+  const started = Promise.withResolvers(), release = Promise.withResolvers()
+  t.after(() => release.resolve())
+  f.steps.push({ before: async request => {
+    started.resolve(); await release.promise; request.signal.throwIfAborted()
+  }, text: '处理这一条新消息。' })
+  await 传纸条(f.ctx, f.根, '0', '1', '请核对新信息。', { kind: 'tell' })
+  await started.promise
+  const queued = 输入('用户按停前已经排队的新纸条。', { kind: 'plugin:blueprint-node', summary: 'blueprint-note:queued:note' })
+  递自动输入(f.ctx, agent, queued)
+  agent.cancel({ kind: 'user' }, { keepInbox: true })
+  release.resolve()
+  await f.settle()
+  await new Promise(resolve => setTimeout(resolve, 100)); await f.settle()
+  assert.equal(f.requests().length, 2, '停稳后的补启不能越过用户停止')
+  assert.ok(agent.inbox.nextStep.some(m => m.id === queued.id))
+  const end = agent.session.ownEvents().findLast(e => e.type === 'turn/end')
+  assert.deepEqual(end.data.reason, { kind: 'aborted', reason: { kind: 'user' } })
+  const later = await 传纸条(f.ctx, f.根, '0', '1', '停下后又来的上级消息。', { kind: 'tell' })
+  await new Promise(resolve => setTimeout(resolve, 50)); await f.settle()
+  assert.equal(f.requests().length, 2)
+  assert.ok((await 读纸条(f.根)).some(n => n.id === later.id), '停止期间纸条仍保存在项目队列')
   assert.deepEqual(f.failures, [])
 })
 

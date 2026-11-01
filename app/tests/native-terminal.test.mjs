@@ -25,9 +25,9 @@ const waitFor = async (predicate, message, timeout = 6000) => {
   while (Date.now() < end) { if (await predicate()) return; await new Promise(resolve => setTimeout(resolve, 10)) }
   assert.fail(message)
 }
-const bounded = async promise => {
+const bounded = async (promise, label) => {
   let timer
-  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('原生终端操作超时')), 10000) })]) }
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(new Error(`原生终端操作超时：${label}`)), 10000) })]) }
   finally { clearTimeout(timer) }
 }
 
@@ -133,9 +133,9 @@ async function fixture(t, shape = 'source') {
   const follow = async (agent, id, attachment) => {
     const abort = new AbortController(), iterator = ctx.terminalController.follow(agent, id, attachment, abort.signal)[Symbol.asyncIterator]()
     followers.push({ abort, iterator })
-    const snapshot = await bounded(iterator.next()); assert.equal(snapshot.value.type, 'snapshot')
-    return { abort, iterator, snapshot: snapshot.value, async until(predicate) {
-      for (;;) { const row = await bounded(iterator.next()); assert.equal(row.done, false); if (predicate(row.value)) return row.value }
+    const snapshot = await bounded(iterator.next(), '初始快照'); assert.equal(snapshot.value.type, 'snapshot')
+    return { abort, iterator, snapshot: snapshot.value, async until(predicate, label) {
+      for (;;) { const row = await bounded(iterator.next(), label); assert.equal(row.done, false); if (predicate(row.value)) return row.value }
     } }
   }
   return { root, neighbor, home, cwd, alternate, handles, create, invoke, ok, userCreate, follow, open, close,
@@ -195,7 +195,7 @@ for (const shape of ['source', 'independent']) {
     await f.ctx.terminalController.resize(agent, id, 'first-window', 100, 35)
     await f.ctx.terminalController.write(agent, id, 'first-window', 'stty size; printf "USER_%s=%s\\n" STATE "$BLUEPRINT_USER_KEEP"\r')
     let output = '', latest = first.snapshot.sequence
-    await first.until(frame => { if (frame.type === 'output') { assert.ok(frame.sequence > latest); latest = frame.sequence; output += frame.data } return output.includes('35 100') && output.includes('USER_STATE=kept') })
+    await first.until(frame => { if (frame.type === 'output') { assert.ok(frame.sequence > latest); latest = frame.sequence; output += frame.data } return output.includes('35 100') && output.includes('USER_STATE=kept') }, '尺寸和保留状态')
     const second = await f.follow(agent, id, 'second-window')
     assert.ok(second.snapshot.sequence >= latest); assert.match(second.snapshot.screen, /USER_STATE=kept/)
     await assert.rejects(f.ctx.terminalController.write(agent, id, 'first-window', 'echo must-not-run\r'), /another attachment/)
@@ -204,12 +204,15 @@ for (const shape of ['source', 'independent']) {
     assert.equal(f.ctx.terminalController.list(agent.id)[0].state, 'running'); assert.equal(alive(pid), true)
     const recovered = await f.follow(agent, id, 'reconnected-window')
     assert.match(recovered.snapshot.screen, /USER_STATE=kept/)
-    await f.ctx.terminalController.write(agent, id, 'reconnected-window', 'printf "USER_%s\\n" BUSY; sleep 60\r')
+    await f.ctx.terminalController.write(agent, id, 'reconnected-window', `PS1='BLUEPRINT_''USER_READY> '; printf "USER_%s\\n" BUSY; sleep 60\r`)
     let interruptOutput = ''
-    await recovered.until(frame => { if (frame.type === 'output') interruptOutput += frame.data; return interruptOutput.includes('USER_BUSY') })
+    await recovered.until(frame => { if (frame.type === 'output') interruptOutput += frame.data; return interruptOutput.includes('USER_BUSY') }, '前台命令开始')
     await f.ctx.terminalController.write(agent, id, 'reconnected-window', '\x03')
+    // PTY write 只确认输入送达；等中断后的新提示符，避免下一条输入撞上终端的输入清空。
+    let readyOutput = ''
+    await recovered.until(frame => { if (frame.type === 'output') readyOutput += frame.data; return readyOutput.includes('BLUEPRINT_USER_READY> ') }, '中断后 shell 就绪')
     await f.ctx.terminalController.write(agent, id, 'reconnected-window', 'printf "USER_%s\\n" AFTER_INTERRUPT\r')
-    await recovered.until(frame => { if (frame.type === 'output') interruptOutput += frame.data; return interruptOutput.includes('USER_AFTER_INTERRUPT') })
+    await recovered.until(frame => { if (frame.type === 'output') interruptOutput += frame.data; return interruptOutput.includes('USER_AFTER_INTERRUPT') }, '中断后命令结果')
     assert.equal(alive(pid), true, 'Ctrl+C结束前台命令并保留同一个用户shell')
     await f.ctx.workingDirectory.set(agent, f.alternate)
     assert.equal(f.ctx.terminalController.environment(agent, signal()).cwd, f.alternate)
@@ -218,7 +221,7 @@ for (const shape of ['source', 'independent']) {
     await writeFile(script, `const fs=require('node:fs'),http=require('node:http'),out={};fs.writeFileSync('用户终端产物.txt','USER_TERMINAL_WRITE');out.current='write';try{fs.readFileSync(${JSON.stringify(join(f.neighbor, '邻居秘密.txt'))});out.neighbor='read'}catch(e){out.neighbor=e.code}try{fs.writeFileSync(${JSON.stringify(join(f.root, '系统文档/任务.db'))},'ATTEMPT');out.machine='write'}catch(e){out.machine=e.code}http.get('http://127.0.0.1:${f.managementPort}/',r=>{r.resume();console.log('USER_BOUNDARY_'+JSON.stringify({...out,management:'read'}))}).on('error',e=>console.log('USER_BOUNDARY_'+JSON.stringify({...out,management:e.code})))`)
     await f.ctx.terminalController.write(agent, id, 'reconnected-window', `${quote(process.execPath)} ${quote(script)}\r`)
     let boundary = ''
-    await recovered.until(frame => { if (frame.type === 'output') boundary += frame.data; return boundary.includes('USER_BOUNDARY_{"current":"write","neighbor":"EPERM","machine":"EPERM","management":"EPERM"}') })
+    await recovered.until(frame => { if (frame.type === 'output') boundary += frame.data; return boundary.includes('USER_BOUNDARY_{"current":"write","neighbor":"EPERM","machine":"EPERM","management":"EPERM"}') }, '用户终端隔离边界')
     assert.equal(f.managementRequests(), 0)
     assert.equal(await readFile(join(f.cwd, '用户终端产物.txt'), 'utf8'), 'USER_TERMINAL_WRITE', '用户终端的真实相对写入仍属打开时自己的shell cwd')
     assert.equal(await readFile(join(f.root, '系统文档/任务.db'), 'utf8'), 'MACHINE_TERMINAL_ORIGINAL')

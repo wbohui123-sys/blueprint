@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, rmSync, realpathSync, existsSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, rmSync, realpathSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { Context } from '@deepseek-ai/cordis'
@@ -9,6 +9,7 @@ import Subprocess from '@deepseek-ai/dsh-subprocess-local'
 import { 装项目隔离 } from './src/项目隔离.js'
 import { 停止后台 } from './src/会话.js'
 import { 留下的进程数 } from './src/留下的进程.js'
+import { 数据根 } from '../prompt/src/路径.js'
 
 const repo = realpathSync(fileURLToPath(new URL('../../..', import.meta.url)))
 const 无头Chrome = join(repo, 'app/.build/native-resources/browser/chromium_headless_shell-1243/chrome-headless-shell-mac-arm64/chrome-headless-shell')
@@ -17,7 +18,8 @@ const 等到 = async (条件, ms = 8000) => { const end = Date.now() + ms; while
 
 // 10-26：节点在 bash 里 `chrome … &` 测游戏，命令结束后任务表上没了它，交回、按停都碰不到，两个开了七八个小时。
 test('真实 dsh 服务：命令里 & 放出去的浏览器和服务，开它的节点交回时整组关掉，别的节点的不动', async () => {
-  const root = mkdtempSync(join(repo, '项目/.留下的进程-'))
+  mkdirSync(join(数据根, '项目'), { recursive: true })
+  const root = realpathSync(mkdtempSync(join(数据根, '项目/.留下的进程-')))
   const host = new Context()
   const fsFiber = await host.plugin(LocalFS, { diffBasisMaxBytes: 1000000 })
   const processFiber = await host.plugin(Subprocess)
